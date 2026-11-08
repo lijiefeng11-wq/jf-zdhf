@@ -20,6 +20,9 @@ CAR_STATUSES = ("matched", "ambiguous", "needs_year")
 PRODUCT = re.compile(r"遮阳挡|遮阳板|遮阳帘|遮阳伞|遮光帘|隐私帘|窗帘|伞罩|车衣|车罩|脚垫|地垫|地毯|后备箱垫|尾箱垫|座套|座垫|坐垫|"
                      r"靠枕|头枕|腰靠|方向盘套|充电垫|防滑垫|储物盒|收纳盒|置物盒|杯架|挂钩|香薰|贴膜|太阳膜|雨刮|雨刷|灯")
 OPEN_ORDER = re.compile(r"待发货|待收货|已发货|待付款|待成团|已签收")
+# The shop's fixed sentences for a sunshade goods card the buyer sends: what the link sells, then which car.
+MAIN_CARD_REPLY = "这是汽车遮阳挡 专车专用的 您什么车用呢？"
+DEDICATED_CARD_REPLY = "您好 这是{brand}专用遮阳挡 亲{brand}什么车用呢？"
 LINK_SENTENCE = re.compile(r"^您进来的是(.+?)专车链接，您的车需要拍(?:「(.+?)」专车链接|店里下单留言车型的通用链接)，"
                            r"我给您记录车型，需要链接说一声我发您$")
 
@@ -169,6 +172,32 @@ def recommend(context, vehicle, docs, describe_doc, catalog):
     link = {"entry": entry["label"], "target": describe_doc(target)["label"] or None, "goods_title": target["title"],
             "option_id": _option(target["title"], options, docs)}
     return {**link, "reply": reply(link)}
+
+
+def card_greeting(context, docs, describe_doc):
+    """The fixed sentence for a sunshade goods card the buyer just sent, before any order, or None.
+
+    A main link gets "专车专用的，您什么车用"; a dedicated link names its brand: the title's leading word ("乐道",
+    "银河": the table files them under 蔚来/吉利), cut to the table brand it starts with ("比亚迪元PLUS" -> 比亚迪).
+    """
+    messages = context.get("messages") or []
+    latest = messages[-1] if messages and isinstance(messages[-1], dict) else {}
+    card = latest.get("card") if isinstance(latest.get("card"), dict) else {}
+    if latest.get("role") != "buyer" or latest.get("kind") != "card" or card.get("type") != "goods" or not card.get("product_key"):
+        return None
+    if any(isinstance(o, dict) and OPEN_ORDER.search(str(o.get("status") or "")) for o in context.get("orders") or ()):
+        return None
+    doc = next((d for d in docs if d["product_key"] == card["product_key"]), None)
+    if doc is None or _product(doc) != "遮阳挡":
+        return None
+    link = describe_doc(doc)
+    if link["kind"] == "main":
+        return MAIN_CARD_REPLY
+    lead = LEAD.match(link["label"]) if link["kind"] == "dedicated" else None
+    if not lead:
+        return None
+    brand = next((f for f in sorted(_families(link), key=len, reverse=True) if f and lead.group(0).startswith(f)), lead.group(0))
+    return DEDICATED_CARD_REPLY.format(brand=brand)
 
 
 def card_after_recommendation(context, docs, describe_doc):
