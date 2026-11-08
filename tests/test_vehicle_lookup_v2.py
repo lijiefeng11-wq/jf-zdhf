@@ -184,7 +184,7 @@ class EngineV2(unittest.TestCase):
 
 class ServerV2(unittest.TestCase):
     def test_config_switch_needs_a_table(self):
-        config = {"shops": [{"shop_id": "a", "name": "虚构店"}], "clients": [], "vehicle_knowledge": {"a": "/unused"}}
+        config = {"shops": [{"shop_id": "a", "name": "虚构店"}], "clients": [], "vehicle_knowledge": {"a": str(Path(tempfile.gettempdir()).resolve() / "unused")}}
         validate_config({**config, "vehicle_lookup_v2": ["a"]})
         for bad in ("a", ["b"], ["a", "a"], [1]):
             with self.subTest(bad=bad), self.assertRaises(ApiError):
