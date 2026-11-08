@@ -81,6 +81,19 @@ class FictionalTable(unittest.TestCase):
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "发货几天"))["status"], "no_vehicle")
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "在吗"))["status"], "no_vehicle")
 
+    def test_goods_questions_name_no_car(self):
+        # Material, light, function and fitting questions are about the goods: never "the table lacks this car".
+        for text in ("这个透光吗", "透不透光", "什么材质的", "有什么功能", "需要打孔吗怎么固定", "有吸盘吗", "怎么收纳",
+                     "这个遮阳挡厚吗", "双面黑和银黑有什么区别", "有安装视频吗", "效果怎么样", "透光率多少", "会不会透光",
+                     "银黑的好还是双面黑好", "尺寸准吗", "需要自己量尺寸吗", "会不会掉下来", "有异味吗", "防水吗", "送吸盘吗",
+                     "能降温多少度", "冬天能用吗", "会褪色吗", "一套有几片", "包含哪些窗", "晚上开灯外面能看到里面吗", "保修多久", "有发票吗",
+                     "这个可以使用吗", "能使用吗", "可不可以用", "有车帘吗"):
+            with self.subTest(text=text):
+                self.assertEqual(self.talk(("buyer", text))["status"], "no_vehicle")
+        # A car named with the question is still looked up, known or not.
+        self.assertEqual(self.talk(("buyer", "示例车A 22款透光吗"))["status"], "matched")
+        self.assertEqual(self.talk(("buyer", "完全没有的车透光吗"))["status"], "not_found")
+
     def test_order_talk_after_an_unknown_car_names_no_car(self):
         # The table lacks the earlier car; "下单了" must never be answered with the no-size sentence.
         for text in ("下单了", "尽快发货", "快点", "还要备注吗？", "你给我备注一下", "你帮我备注一下，我下单了",
