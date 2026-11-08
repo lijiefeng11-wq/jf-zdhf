@@ -733,6 +733,9 @@ AFFIRM = re.compile(r"(?:是|是的|对|对的|嗯|嗯嗯|没错|就是|就是�
 # Words around a bare year / seats / generation in a short answer to a vehicle question ("18款的", "是7座").
 FOLLOW_UP_FILLER = re.compile(r"我的是|我的|我家的|就是|请问|您好|你好|谢谢|好的|在吗|在么|能用吗|能装吗|可以吗|可以用吗|"
                               r"年份|年款|款式|的|是|呢|吗|款|年|版|车|哦|啊|呀|哈|嗯|对|亲|那|三厢|两厢")
+GREETING = re.compile(r"在吗|在么|在嘛|在不在|在的|人呢|有人吗|老板|客服|你好|您好|哈喽|hello|hi|嗯|哦|好的|谢谢|麻烦|请问")
+NO_VEHICLE_HINT = ("最新买家消息没有说出车名：买家在问能不能用就请他发具体车型和年款；"
+                   "其他问题按店铺规则回答。不要说查不到车型")
 ORDER_CLOSED = re.compile(r"取消|关闭|退款成功|已退款|待支付|待付款")
 
 
@@ -774,6 +777,12 @@ def _named(catalog, text):
                 or catalog._contained(word, loose=True) or TRIM_TAIL.fullmatch(word)):
             return True
     return False
+
+
+def _no_car_words(text):
+    """Nothing but greetings, punctuation and words that are never part of a car name ("后窗", "在吗", "？")."""
+    rest = FILLER.sub(" ", GREETING.sub(" ", _normalize(text)))
+    return not re.sub(r"[\s，。？！,.?!~～、…：:;；]", "", FOLLOW_UP_FILLER.sub("", rest))
 
 
 def _turn(catalog, texts):
@@ -825,6 +834,8 @@ def conversation(catalog, messages, orders=()):
                           or (status == "not_found" and any(re.search(r"车型|车名|哪款|哪一款|哪年|年份|年款", r) for r in replies))):
             asks, last_asked = asks + 1, status
     result, followed = _turn(catalog, texts)
+    if result["status"] == "not_found" and not followed and _no_car_words(texts[-1]):
+        result = {**result, "status": "no_vehicle", "hint": NO_VEHICLE_HINT}
     status = result["status"]
     forced = None
     if status == "needs_human":

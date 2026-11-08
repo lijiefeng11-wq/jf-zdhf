@@ -54,7 +54,8 @@ class FictionalTable(unittest.TestCase):
     def test_statuses(self):
         cases = {"示例车A": "needs_year", "示例车A 22款": "matched", "示例车A 18款": "year_mismatch",
                  "示例旅行车": "needs_model", "示例旅行车 七座": "matched", "星河远杭": "similar",
-                 "示例軒逸": "matched", "完全没有的车": "not_found", "吉姆尼5门": "needs_human"}
+                 "示例軒逸": "matched", "完全没有的车": "not_found", "吉姆尼5门": "needs_human",
+                 "在吗": "no_vehicle", "您好？": "no_vehicle", "后窗": "no_vehicle"}
         for text, status in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(self.talk(("buyer", text))["status"], status)
@@ -69,6 +70,7 @@ class FictionalTable(unittest.TestCase):
         self.assertEqual(result["status"], "matched")
         # A new question is not a follow-up: it never inherits the earlier car.
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "发货几天"))["status"], "not_found")
+        self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "在吗"))["status"], "no_vehicle")
 
     def test_program_stops(self):
         self.assertEqual(self.talk(("buyer", "吉姆尼5门"))["forced"], "needs_human")
@@ -86,7 +88,7 @@ class FictionalTable(unittest.TestCase):
     def test_short_answers_without_a_car(self):
         for turns in ((("buyer", "是的"),), (("buyer", "18款"), ("agent", "哪款车？"), ("buyer", "是的"))):
             with self.subTest(turns=turns):
-                self.assertEqual(self.talk(*turns)["status"], "not_found")
+                self.assertEqual(self.talk(*turns)["status"], "no_vehicle")
 
     def test_latest_non_text_has_no_lookup(self):
         msgs = messages(("buyer", "示例车A"))
@@ -126,6 +128,12 @@ class EngineV2(unittest.TestCase):
         result, _ = self.decide(vehicle, {"action": "reply", "rule_id": "vehicle_no_size", "text": "", "reason": "x"},
                                 {"action": "reply", "rule_id": "vehicle_fit", "text": "", "reason": "x"})
         self.assertEqual(result["action"], "handoff")  # Neither fixed sentence fits a question status.
+
+    def test_no_vehicle_offers_no_vehicle_sentence(self):
+        vehicle = {"status": "no_vehicle", "hint": "没有提到车型", "candidates": [], "follow_up": False}
+        result, _ = self.decide(vehicle, {"action": "reply", "rule_id": "vehicle_no_size", "text": "", "reason": "x"},
+                                {"action": "reply", "text": "您好，请问有什么可以帮您？", "reason": "x"})
+        self.assertEqual(result["text"], "您好，请问有什么可以帮您？")
 
     def test_question_room_and_unverified_claims(self):
         vehicle = {"status": "needs_year", "hint": "按年款区分", "candidates": [], "follow_up": False}
