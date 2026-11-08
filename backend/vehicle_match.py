@@ -788,7 +788,7 @@ def _follow_up(text):
 
 
 def _window_only(text):
-    return not re.sub(r"[\s，。？！,.?!~～]", "", FOLLOW_UP_FILLER.sub("", WINDOW.sub(" ", _normalize(text))))
+    return bool(WINDOW.search(_normalize(text))) and not re.sub(r"[\s，。？！,.?!~～]", "", FOLLOW_UP_FILLER.sub("", WINDOW.sub(" ", _normalize(text))))
 
 
 def _named(catalog, text):
@@ -813,7 +813,8 @@ def _no_car_words(text):
 
 
 def _turn(catalog, texts):
-    """The lookup for the latest of texts: the latest car message plus the short answers after it."""
+    """The lookup for the latest of texts: the latest car message plus the short answers after it, and how many
+    of those answers it took in."""
     extras = []
     for text in reversed(texts[-MAX_TURNS:]):
         if _follow_up(text) and catalog.search(text)["status"] == "not_found":
@@ -835,14 +836,14 @@ def _turn(catalog, texts):
             # completes a car the table has.
             break
         if result["status"] not in ("not_found", "needs_human") and not _named(catalog, text):
-            return catalog.search(""), False  # Rows found only through a stray digit or character.
+            return catalog.search(""), 0  # Rows found only through a stray digit or character.
         similar = (result.get("understood") or {}).get("similar")
         if affirmed and result["status"] == "similar" and similar and len(similar[1]) == 1:
             # "是汉兰达吗？" "是的": the buyer confirmed the table's name; search it as said.
             result = catalog.search((similar[1][0] + " " + added).strip())
-        return result, bool(extras)
+        return result, len(extras)
     # Only short answers ("是的", "18款") and no car named before them: nothing to carry.
-    return catalog.search(texts[-1]), False
+    return catalog.search(texts[-1]), 0
 
 
 def _seller_after(messages, index, end):
@@ -873,8 +874,9 @@ def conversation(catalog, messages, orders=()):
                           or (status == "not_found" and any(re.search(r"车型|车名|哪款|哪一款|哪年|年份|年款", r) for r in replies))):
             asks, last_asked = asks + 1, status
     result, followed = _turn(catalog, texts)
-    if result["status"] in MATCH_STATUSES and NEGATION.search(_normalize(texts[-1])):
-        # "不是星河远航，是…": the name found may be the car the buyer denies; ask instead of approving it.
+    if result["status"] in MATCH_STATUSES and any(NEGATION.search(_normalize(t)) for t in texts[-1 - followed:]):
+        # "不是星河远航，是…" (even before a "后窗" answer): the name found may be the car the buyer denies; ask
+        # instead of approving it.
         result = {**result, "status": "needs_model",
                   "hint": "买家的话里否认了某款车，表内找到的可能正是被否认的车：请买家直接说出自己的车型和年款"}
     if result["status"] == "not_found" and (
@@ -894,6 +896,6 @@ def conversation(catalog, messages, orders=()):
     elif status in CHOICE_STATUSES and any(
             isinstance(o, dict) and not ORDER_CLOSED.search(str(o.get("status") or "")) for o in orders or ()):
         forced = "ordered_vehicle_unclear"
-    return {"status": status, "hint": result["hint"], "follow_up": followed, "asks_before": asks,
+    return {"status": status, "hint": result["hint"], "follow_up": bool(followed), "asks_before": asks,
             "candidates": [{"family": c["family"], "model": c["model"]} for c in result["candidates"]],
             "total_matches": result["total_matches"], "forced": forced}

@@ -124,6 +124,14 @@ class FictionalTable(unittest.TestCase):
         self.assertEqual(bare["status"], "matched")
         # A denied car is never approved.
         self.assertNotIn(self.talk(("buyer", "不是星河远航，是完全没有的车"))["status"], vehicle_match.MATCH_STATUSES)
+        # Also when a window answer follows the denial.
+        self.assertNotIn(self.talk(("buyer", "不是星河远航，是完全没有的车"), ("buyer", "后窗"))["status"],
+                         vehicle_match.MATCH_STATUSES)
+        # A yes to an unknown car keeps the car the buyer confirmed: it is no window answer.
+        for yes in ("是的", "对", "嗯"):
+            with self.subTest(yes=yes):
+                confirmed = self.talk(("buyer", "完全没有的车"), ("agent", "请确认车型是完全没有的车吗？"), ("buyer", yes))
+                self.assertEqual((confirmed["status"], confirmed["follow_up"]), ("not_found", True))
 
     def test_brand_said_picks_its_rows(self):
         with tempfile.TemporaryDirectory() as temp:
