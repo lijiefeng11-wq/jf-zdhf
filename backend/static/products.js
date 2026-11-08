@@ -5,7 +5,9 @@ window.setupProductLearning = function ({state, request, handleError}) {
   if (!panel) return;
   const input = document.getElementById("product-source"), button = document.getElementById("product-learn");
   const status = document.getElementById("product-status"), list = document.getElementById("product-preview");
-  let active = null, busy = false, polling = false, seq = 0, preview = "";
+  const notes = document.getElementById("product-notes"), notesSave = document.getElementById("product-notes-save");
+  const notesStatus = document.getElementById("product-notes-status");
+  let active = null, busy = false, polling = false, seq = 0, preview = "", savedNotes = null;
   const context = () => ({shop: state.selectedShopId, token: state.token, epoch: state.epoch});
   const current = c => c.shop === state.selectedShopId && c.token === state.token && c.epoch === state.epoch;
   function render(value) {
@@ -30,7 +32,8 @@ window.setupProductLearning = function ({state, request, handleError}) {
       preview = snapshot; list.replaceChildren();
       for (const product of products) {
         const details = document.createElement("details"), title = document.createElement("summary");
-        title.textContent = product.title + " · " + product.category + (product.details_complete ? "" : " · 部分资料缺失");
+        title.textContent = product.title + " · " + product.category + (product.link ? " · " + product.link : "") +
+          (product.details_complete ? "" : " · 部分资料缺失");
         details.appendChild(title);
         const ul = document.createElement("ul");
         for (const fact of Array.isArray(product.facts) ? product.facts : []) {
@@ -40,15 +43,21 @@ window.setupProductLearning = function ({state, request, handleError}) {
       }
     }
     button.textContent = value.status === "idle" ? "学习本店商品" : "重新学习本店商品";
+    // Keep what the owner is typing: only an untouched box follows the saved text.
+    const saved = typeof value.notes === "string" ? value.notes : "";
+    if (savedNotes === null || notes.value === savedNotes) notes.value = saved;
+    savedNotes = saved;
   }
   async function refresh() {
     const c = context(), identity = JSON.stringify(c);
     if (identity !== active) {
       active = identity; seq++; busy = false; preview = ""; input.value = ""; list.replaceChildren();
+      savedNotes = null; notes.value = ""; notesStatus.textContent = "";
       status.textContent = "正在读取当前店铺的产品知识状态。";
       const summary = document.getElementById("product-summary"); if (summary) summary.textContent = "";
     }
     button.disabled = !c.shop || !c.token || busy;
+    notesSave.disabled = !c.shop || !c.token || busy;
     if (!c.shop || !c.token || state.route !== "scripts" || document.hidden || polling || busy) return;
     const order = ++seq;
     polling = true;
@@ -76,10 +85,31 @@ window.setupProductLearning = function ({state, request, handleError}) {
       if (current(c)) status.textContent = err.code === "invalid_product_url" ? "请使用拼多多店铺/商品链接，或留空读取当前登录店铺。" : "安排未确认，请先看当前进度，不要连续点击。";
     } finally { if (current(c) && order === seq) { busy = false; button.disabled = false; } }
   });
+  notesSave.addEventListener("click", async () => {
+    const c = context();
+    if (!c.shop || !c.token || busy) return;
+    busy = true; notesSave.disabled = true; const order = ++seq, sent = notes.value;
+    notesStatus.textContent = "正在保存详情要点。";
+    try {
+      const data = await request("/api/v1/admin/shops/" + encodeURIComponent(c.shop) + "/product-notes", {
+        token: c.token, method: "PUT", body: {notes: sent}
+      });
+      if (current(c)) {
+        // Text typed while the save was on its way stays in the box, unsaved.
+        const typed = notes.value !== sent;
+        savedNotes = sent; render(data);
+        notesStatus.textContent = typed ? "已保存点击时的内容；之后的修改还没保存。" :
+          data.notes ? "已保存，买家问材质、功能、透光时按要点回答。" : "已清空详情要点。";
+      }
+    } catch (err) {
+      if (current(c)) notesStatus.textContent = err.code === "invalid_product_notes" ? "要点最多 2000 字，请精简后再保存。" : "保存未确认，请刷新后核对。";
+    } finally { if (current(c) && order === seq) { busy = false; notesSave.disabled = false; } }
+  });
   setInterval(() => void refresh(), 3000);
   void refresh();
   return {refresh: function () { void refresh(); }, reset: function () {
     active = null; seq++; busy = false; preview = ""; input.value = ""; list.replaceChildren();
+    savedNotes = null; notes.value = ""; notesStatus.textContent = "";
     const summary = document.getElementById("product-summary"); if (summary) summary.textContent = "";
     status.textContent = "还未学习商品。"; button.disabled = true;
   }};

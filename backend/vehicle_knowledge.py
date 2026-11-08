@@ -1,5 +1,6 @@
 """Bounded, read-only local vehicle table retrieval. Candidates are not fitment approval."""
 import copy
+import json
 import os
 from pathlib import Path
 import re
@@ -7,7 +8,7 @@ import stat
 import time
 import unicodedata
 
-from . import vehicle_match
+from . import productlinks, vehicle_match
 
 MAX_FILES = 5000
 MAX_FILE_BYTES = 65536
@@ -116,6 +117,7 @@ class VehicleCatalog:
                 aliases.setdefault(name, set()).add(index)
                 _require(len(aliases) <= MAX_ALIASES, "too_many_vehicle_aliases")
         self._matchers = tuple((_matcher(name), indexes) for name, indexes in aliases.items())
+        self._links = {}
 
     def lookup(self, text):
         query = _normalize(text) if isinstance(text, str) and len(text) <= 8000 else ""
@@ -136,6 +138,23 @@ class VehicleCatalog:
     def conversation(self, messages, orders=()):
         """vehicle_lookup_v2: the latest buyer turn's status, hint and program stop; None without a text turn."""
         return vehicle_match.conversation(self._v2, messages, orders)
+
+    def describe_link(self, doc):
+        """The learned goods as a main link, a dedicated link naming table cars, or neither (cached per text)."""
+        key = (doc["product_key"], json.dumps([doc.get("title"), doc.get("facts")], ensure_ascii=False))
+        if key not in self._links:
+            if len(self._links) >= 2000:
+                self._links.clear()
+            self._links[key] = productlinks.describe(doc, self._v2)
+        return self._links[key]
+
+    def recommend_link(self, context, vehicle, docs):
+        """The link a matched car needs when the buyer came in through another car's dedicated link, or None."""
+        return productlinks.recommend(context, vehicle, docs, self.describe_link, self._v2)
+
+    def link_card(self, context, docs):
+        """The goods card of the link the previous reply recommended, when sendable now, or None."""
+        return productlinks.card_after_recommendation(context, docs, self.describe_link)
 
     def lookup_context(self, messages):
         """Keep a recent buyer's model for a bare year/window/greeting, never guess a new model."""

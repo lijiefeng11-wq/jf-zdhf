@@ -23,6 +23,17 @@ test("negative product attributes and independent whole SKU combinations are pre
   assert(parseProductFacts("a", row, null, skus).facts.some(x => x.includes("规格组合")));
   assert.equal(parseProductFacts("a", row, {properties: []}, {sku: []}).details_complete, true);
 });
+test("combinations sharing their first spec are one line, so many cars and windows fit", () => {
+  const specs = (car: string, window: string) => ({specs: [{specKey: "款式", specValue: car}, {specKey: "型号", specValue: window}]});
+  const cars = Array.from({length: 12}, (_, i) => "示例车" + i), windows = ["前挡1片", "尾挡1片", "侧窗4片", "侧窗6片", "全车8片"];
+  const doc = parseProductFacts("a", row, {properties: []}, {sku: cars.flatMap(c => windows.map(w => specs(c, w)))});
+  assert.equal(doc.details_complete, true);
+  assert.equal(doc.facts.length, 1 + cars.length);
+  assert(doc.facts.includes('规格组合：款式："示例车0"；型号："前挡1片"、"尾挡1片"、"侧窗4片"、"侧窗6片"、"全车8片"'));
+  // A lone combination or rests of different shapes keep the whole combination.
+  const mixed = parseProductFacts("a", row, {properties: []}, {sku: [specs("甲", "前挡"), {specs: [{specKey: "款式", specValue: "甲"}]}]});
+  assert.deepEqual(mixed.facts.slice(1), ['规格组合：款式："甲"；型号："前挡"', '规格组合：款式："甲"']);
+});
 test("oversized and malformed details remain partial; no stock/price/ID captured", () => {
   const doc = parseProductFacts("a", row, {properties: Array.from({length: 90}, (_, i) => ({name: "属性" + i, values: ["值"]}))}, {sku: []});
   assert(doc.facts.length <= 80); assert.equal(doc.details_complete, false);

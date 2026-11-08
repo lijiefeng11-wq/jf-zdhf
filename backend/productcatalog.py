@@ -10,6 +10,7 @@ from .productknowledge import choose_knowledge, validate_products
 from .store import require
 
 CAPABILITY = "product_knowledge"
+MAX_NOTES = 2000
 FAILURES = {"product_page_unavailable", "product_source_changed", "product_list_invalid",
             "product_details_failed", "product_upload_failed", "product_collection_timeout"}
 
@@ -36,9 +37,16 @@ def selection(raw):
         require(False, "invalid_product_url")
 
 
+def _link_label(link):
+    if link["kind"] == "main":
+        return "大链接（下单留言车型）"
+    return "专车链接：" + link["label"] if link["kind"] == "dedicated" else ""
+
+
 class ProductCatalog:
-    def __init__(self, store):
+    def __init__(self, store, catalogs=None):
         self.store = store
+        self.catalogs = catalogs or {}
         with store.lock, store.db:
             store.db.executescript("""
             CREATE TABLE IF NOT EXISTS product_learning_tasks(shop_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
@@ -46,6 +54,7 @@ class ProductCatalog:
               PRIMARY KEY(request_id,product_key));
             CREATE TABLE IF NOT EXISTS product_catalog(shop_id TEXT,product_key TEXT,payload TEXT NOT NULL,
               observed_at REAL NOT NULL,PRIMARY KEY(shop_id,product_key));
+            CREATE TABLE IF NOT EXISTS product_notes(shop_id TEXT PRIMARY KEY,notes TEXT NOT NULL,updated_at REAL NOT NULL);
             """)
 
     def _task(self, shop):
@@ -68,8 +77,11 @@ class ProductCatalog:
             lease = self.store._lease(shop)
             value["client_ready"] = bool(lease and lease["expires_at"] > time.time() and CAPABILITY in lease.get("capabilities", []))
             docs = [json.loads(r[0]) for r in self.store.db.execute("SELECT payload FROM product_catalog WHERE shop_id=? ORDER BY observed_at DESC,product_key LIMIT 20", (shop,))]
+            catalog = self.catalogs.get(shop)
             value["products"] = [{"title": d["title"], "category": d["category"], "details_complete": d["details_complete"],
-                                  "facts": d["facts"]} for d in docs]
+                                  "facts": d["facts"], **({"link": _link_label(catalog.describe_link(d))} if catalog else {})}
+                                 for d in docs]
+            value["notes"] = self._notes(shop)
             return value
 
     def request(self, shop, raw_url):
@@ -173,3 +185,31 @@ class ProductCatalog:
         with self.store.lock:
             rows = self.store.db.execute("SELECT payload FROM product_catalog WHERE shop_id=? AND product_key IN (" + ",".join("?" for _ in keys) + ")", [shop, *keys]).fetchall()
             return choose_knowledge(goods, [json.loads(r[0]) for r in rows])
+
+    def docs(self, shop):
+        with self.store.lock:
+            return [json.loads(r[0]) for r in self.store.db.execute(
+                "SELECT payload FROM product_catalog WHERE shop_id=? ORDER BY product_key", (shop,))]
+
+    def _notes(self, shop):
+        row = self.store.db.execute("SELECT notes FROM product_notes WHERE shop_id=?", (shop,)).fetchone()
+        return row[0] if row else ""
+
+    def notes(self, shop):
+        with self.store.lock:
+            return self._notes(shop)
+
+    def set_notes(self, shop, notes):
+        """The shop's detail-page points (material, light, functions), typed by the owner; replaces the old text."""
+        require(isinstance(notes, str) and len(notes) <= MAX_NOTES, "invalid_product_notes")
+        notes = notes.strip()
+        require("\x00" not in notes, "invalid_product_notes")
+        with self.store.lock, self.store.db:
+            settings = self.store._settings(shop)
+            if notes:
+                self.store.db.execute("INSERT OR REPLACE INTO product_notes VALUES (?,?,?)", (shop, notes, time.time()))
+            else:
+                self.store.db.execute("DELETE FROM product_notes WHERE shop_id=?", (shop,))
+            settings["version"] += 1
+            self.store.db.execute("UPDATE shops SET settings=? WHERE shop_id=?", (json.dumps(settings), shop))
+            return self.status(shop)

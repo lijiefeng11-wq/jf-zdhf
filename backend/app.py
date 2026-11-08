@@ -418,6 +418,10 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._json()
                 require(set(payload) == {"source_url"}, "invalid_product_request")
                 return self._send(202, self.server.products.request(parts[4], payload["source_url"]))
+            if len(parts) == 6 and parts[3] == "shops" and parts[5] == "product-notes" and method == "PUT":
+                payload = self._json()
+                require(set(payload) == {"notes"}, "invalid_product_notes")
+                return self._send(200, self.server.products.set_notes(parts[4], payload["notes"]))
             if path == "/api/v1/admin/events" and method == "GET":
                 query = parse_qs(urlsplit(self.path).query)
                 try:
@@ -560,7 +564,7 @@ class Server(ThreadingHTTPServer):
             self.vehicle_catalogs = {shop: vehicle_knowledge.load_directory(path)
                                      for shop, path in config.get("vehicle_knowledge", {}).items()}
             self.store = Store(data_dir, config["shops"])
-            self.products = productcatalog.ProductCatalog(self.store)
+            self.products = productcatalog.ProductCatalog(self.store, self.vehicle_catalogs)
             if startup_check is not None:
                 startup_check()
             self.auth = AdminAuth(data_dir)
@@ -648,6 +652,9 @@ class Server(ThreadingHTTPServer):
                 knowledge = self.products.knowledge(job["shop_id"], goods) if any(g.get("product_key") for g in goods) else []
                 if knowledge:
                     job["product_knowledge"] = knowledge
+                notes = self.products.notes(job["shop_id"])
+                if notes:
+                    job["product_notes"] = notes
                 catalog = self.vehicle_catalogs.get(job["shop_id"])
                 forced = None
                 if catalog is not None and job["shop_id"] in self.config.get("vehicle_lookup_v2", []):
@@ -656,6 +663,13 @@ class Server(ThreadingHTTPServer):
                     if found is not None:
                         forced = found.pop("forced")
                         job["vehicle_knowledge"] = {**found, "version": 2}
+                    docs = self.products.docs(job["shop_id"])
+                    # The buyer came in through another car's dedicated link: the link this car needs, or the
+                    # card of the link just recommended.
+                    link = catalog.recommend_link(context, found, docs) if docs and found else None
+                    card = catalog.link_card(context, docs) if docs else None
+                    if link or card:
+                        job["vehicle_link"] = {**({"reply": link["reply"]} if link else {}), **({"card": card} if card else {})}
                 elif catalog is not None:
                     # Run in this shop's worker, outside the global store lock and
                     # scheduler. Only authenticated shop ownership selects a catalog.
