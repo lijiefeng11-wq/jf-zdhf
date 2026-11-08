@@ -364,7 +364,7 @@ def model_decide(context, settings, config, allow_send=False, *, deadline_monoto
                                      {"role": "user", "content": model_content(model_context)}],
                         "response_format": {"type": "json_object"}, "temperature": 0, "max_tokens": MAX_COMPLETION_TOKENS, "stream": False}
         started = time.monotonic()
-        diagnostics.emit("model_attempt", slot=name)
+        diagnostics.emit("model_attempt", slot=name, model=slot["model"])
         try:
             spec = _slot_spec(config, name)
             if deadline_monotonic is not None:
@@ -387,7 +387,7 @@ def model_decide(context, settings, config, allow_send=False, *, deadline_monoto
         except ProviderFailure as exc:
             # Connectivity/timeout/HTTP errors and unusable provider output may use the backup once.
             failures[name] = exc.code
-            diagnostics.emit("model_failed", slot=name, code=exc.code, duration_ms=int((time.monotonic() - started) * 1000))
+            diagnostics.emit("model_failed", slot=name, model=slot["model"], code=exc.code, duration_ms=int((time.monotonic() - started) * 1000))
             continue
         finally:
             if timing is not None:
@@ -398,7 +398,7 @@ def model_decide(context, settings, config, allow_send=False, *, deadline_monoto
             return decision("handoff", "reply_deadline_exceeded")
         if timing is not None:
             timing["model_slot"] = name
-        diagnostics.emit("model_succeeded", slot=name, fallback=name == "backup", duration_ms=int((time.monotonic() - started) * 1000))
+        diagnostics.emit("model_succeeded", slot=name, model=slot["model"], fallback=name == "backup", duration_ms=int((time.monotonic() - started) * 1000))
         if rule is not None:
             # The server resolves the target; the model cannot override it.
             if "handling" in rule:

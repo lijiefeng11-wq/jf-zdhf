@@ -8,7 +8,7 @@
 - `request_rejected`：接口拒绝的具体错误码，例如身份失效或参数错误。
 - `event_snapshot`：接口返回的任务状态和发送状态；这只是后台所存回执，不额外证明平台成功。
 - `decision_started/decision_finished`：后台判断开始与结束、动作和原因类别。
-- `model_attempt/model_failed/model_succeeded`：主/备槽位、故障码、耗时和备用是否成功。
+- `model_attempt/model_failed/model_succeeded`：主/备槽位（`slot`）、模型名（`model`）、故障码、耗时和备用是否成功。带回复期限的任务在子进程中调用模型，记录经管道交回后台写入，带同一 `event_ref`；被期限截断的调用至少留下 `model_attempt`。
 - `model_test`：管理员连接测试结果，不记录模型返回原文。
 - `request_internal_error/decision_internal_error/worker_stopped_unexpectedly`：异常类型及文件名、函数名、行号；最后一种表示工作线程已停止，需排查服务，不能靠 health=ok 判断任务处理正常。
 - `service_started/service_stopped`：服务生命周期。
