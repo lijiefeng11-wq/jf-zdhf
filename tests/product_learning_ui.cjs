@@ -4,7 +4,7 @@ const source=fs.readFileSync('backend/static/products.js','utf8');
 class Node { constructor(){this.textContent='';this.value='';this.children=[];this.disabled=false;this.listeners={};} appendChild(n){this.children.push(n);} replaceChildren(){this.children=[];} addEventListener(k,f){this.listeners[k]=f;} }
 const tick=()=>new Promise(r=>setImmediate(r));
 function setup(){
- const nodes=Object.fromEntries(['product-learning','product-source','product-learn','product-status','product-preview','product-summary'].map(k=>[k,new Node()]));
+ const nodes=Object.fromEntries(['product-learning','product-source','product-learn','product-status','product-preview','product-summary','product-notes','product-notes-save','product-notes-status'].map(k=>[k,new Node()]));
  const state={selectedShopId:'a',token:'fictional-admin',epoch:1,route:'scripts'},calls=[],window={};
  const document={hidden:false,getElementById:k=>nodes[k],createElement:()=>new Node()};
  vm.runInNewContext(source,{window,document,setInterval:()=>0});
@@ -35,5 +35,16 @@ function setup(){
  h.control.refresh();h.calls.at(-1).resolve({status:'failed',error:'product_learning_failed',products:[]});await tick();assert.match(h.nodes['product-status'].textContent,/原有产品知识保持不变/);passed++;
  h.control.refresh();const logout=h.calls.at(-1);h.state.token=null;h.state.epoch++;h.control.reset();logout.resolve({status:'completed',processed:9,products:[{title:'旧资料',facts:[]}]});await tick();
  assert.equal(h.nodes['product-preview'].children.length,0);assert.equal(h.nodes['product-learn'].disabled,true);passed++;
+ const n=setup();n.calls[0].resolve({status:'idle',products:[],notes:'材质：钛银布'});await tick();
+ assert.equal(n.nodes['product-notes'].value,'材质：钛银布');
+ n.nodes['product-notes'].value='材质：钛银布\n双面黑不透光';n.control.refresh();n.calls.at(-1).resolve({status:'idle',products:[],notes:'材质：钛银布'});await tick();
+ assert.equal(n.nodes['product-notes'].value,'材质：钛银布\n双面黑不透光');passed++;
+ const save=n.nodes['product-notes-save'].listeners.click();const put=n.calls.at(-1);
+ assert.equal(put.opts.method,'PUT');assert.match(put.url,/\/shops\/a\/product-notes$/);assert.equal(put.opts.body.notes,'材质：钛银布\n双面黑不透光');
+ put.resolve({status:'idle',products:[],notes:'材质：钛银布\n双面黑不透光'});await save;
+ assert.match(n.nodes['product-notes-status'].textContent,/已保存/);assert.equal(n.nodes['product-notes-save'].disabled,false);passed++;
+ const bad=n.nodes['product-notes-save'].listeners.click();n.calls.at(-1).reject({code:'invalid_product_notes'});await bad;
+ assert.match(n.nodes['product-notes-status'].textContent,/2000/);passed++;
+ n.state.selectedShopId='b';n.control.refresh();assert.equal(n.nodes['product-notes'].value,'');passed++;
  console.log(JSON.stringify({passed,actualProductUi:true,platform:false}));
 })().catch(e=>{console.error(e);process.exitCode=1;});

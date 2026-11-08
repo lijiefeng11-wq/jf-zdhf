@@ -56,19 +56,38 @@ export function parseProductFacts(shop: string, row: ProductRow, rawProperties: 
     add(`属性：${name}：${values.join("、")}`);
   }
   const skus = payload(rawSkus)?.sku;
+  // Combinations sharing their first spec ("款式：问界m5") are one line listing the rest, so a dedicated link's
+  // dozens of cars x windows fit the fact budget: 规格组合：款式："问界m5"；型号："前挡1片"、"尾挡1片".
+  const groups = new Map<string, string[][]>();
   if (!Array.isArray(skus)) complete = false;
   else for (const value of skus) {
     const sku = obj(value);
     if (!Array.isArray(sku?.specs)) { complete = false; continue; }
-    const parts: string[] = [], names = new Set<string>();
+    const parts: [string, string][] = [], names = new Set<string>();
     let valid = true;
     for (const spec of sku.specs) {
       const s = obj(spec), name = text(s?.specKey, 100), value = text(s?.specValue, 500);
       if (!name || !value || names.has(name)) { valid = false; break; }
-      names.add(name); parts.push(`${name}：${JSON.stringify(value)}`);
+      names.add(name); parts.push([name, JSON.stringify(value)]);
     }
-    if (!valid || !parts.length) complete = false;
-    else if (parts.length) add(`规格组合：${parts.join("；")}`);
+    if (!valid || !parts.length) { complete = false; continue; }
+    const first = `${parts[0][0]}：${parts[0][1]}`;
+    const rest = parts.slice(1).map(([n, v]) => `${n}：${v}`);
+    (groups.get(first) ?? groups.set(first, []).get(first)!).push(rest);
+  }
+  for (const [first, rests] of groups) {
+    const names = rests.map(r => r.length === 1 ? r[0].slice(0, r[0].indexOf("：")) : null);
+    if (rests.length > 1 && names.every(n => n !== null && n === names[0])) {
+      // One line per group, split before the fact length limit.
+      let values: string[] = [];
+      const flush = () => { if (values.length) add(`规格组合：${first}；${names[0]}：${values.join("、")}`); values = []; };
+      for (const r of rests) {
+        const v = r[0].slice(names[0]!.length + 1);
+        if (`规格组合：${first}；${names[0]}：${[...values, v].join("、")}`.length > 1000) flush();
+        values.push(v);
+      }
+      flush();
+    } else for (const r of rests) add(`规格组合：${[first, ...r].join("；")}`);
   }
   return { product_key: key, title, facts, details_complete: complete };
 }

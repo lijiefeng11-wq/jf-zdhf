@@ -275,13 +275,19 @@
 
               <details id="product-learning" class="help-box">
                 <summary id="product-title">学习本店商品<span id="product-summary" class="small muted"></span></summary>
-                <p class="field-help">使用客户端当前店铺的登录状态读取在售商品、文字属性和规格组合，再用已配置模型分类整理。买家咨询时按商品编号匹配本店知识。</p>
+                <p class="field-help">使用客户端当前店铺的登录状态读取在售商品、文字属性和规格组合，再用已配置模型分类整理。买家咨询时按商品编号匹配本店知识；规格写“留言车型”的是大链接，规格是具体车型的是专车链接。买家从专车链接进来却问别的车时，会推荐他的车该拍的链接并记录车型。</p>
                 <label class="field"><span class="field-label">店铺或商品链接（选填）</span>
                   <input id="product-source" type="url" maxlength="1000" placeholder="留空读取当前店铺；商品链接可只学习这一件">
                 </label>
                 <button id="product-learn" type="button" class="btn btn-sm">学习本店商品</button>
                 <p id="product-status" class="small muted" role="status" aria-live="polite">还未学习商品。</p>
                 <p class="field-help">知识按店铺隔离，共用话术模板不会混用商品。只在模型/混合方式调用模型时使用；纯图片里的说明暂未识别，缺失规格仍会询问，不自动开启回复。</p>
+                <label class="field"><span class="field-label">详情页要点（本店通用）</span>
+                  <textarea id="product-notes" rows="6" maxlength="2000" placeholder="例：材质：钛银布＋黑色遮光层；双面黑款完全不透光，外银内黑款反光隔热；吸盘式安装，不留胶印"></textarea>
+                </label>
+                <p class="field-help">把商品详情页里的材质、功能、透不透光、安装方式等写在这里。买家问到时按这里回答，没写的不会编。</p>
+                <button id="product-notes-save" type="button" class="btn btn-sm">保存详情要点</button>
+                <p id="product-notes-status" class="small muted" role="status" aria-live="polite"></p>
                 <details><summary>查看已学产品的关键资料（最近 20 件）</summary><div id="product-preview"></div></details>
               </details>
 
