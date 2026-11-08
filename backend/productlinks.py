@@ -14,7 +14,8 @@ TITLE_CARS = re.compile(r"^(.+?)(?:全车定制|专车专用|专用|定制)")
 SPEC_PART = re.compile(r"([^：；]+)：\"([^\"]*)\"")
 BRACKET = re.compile(r"[【\[]([^】\]]*)[】\]]")
 LEAD = re.compile(r"[\u4e00-\u9fff]+")
-CAR_STATUSES = ("matched", "ambiguous", "needs_year", "year_mismatch")
+# A year the table lacks ("30款卡罗拉") only finds nearby rows to ask about: the link names none of them.
+CAR_STATUSES = ("matched", "ambiguous", "needs_year")
 OPEN_ORDER = re.compile(r"待发货|待收货|已发货|待付款|待成团|已签收")
 LINK_SENTENCE = re.compile(r"^您进来的是(.+?)专车链接，您的车需要拍(?:「(.+?)」专车链接|店里下单留言车型的通用链接)，"
                            r"我给您记录车型，需要链接说一声我发您$")
@@ -58,7 +59,7 @@ def describe(doc, catalog):
         result = catalog.search(token)
         if result["status"] in CAR_STATUSES and result["candidates"]:
             units.append({"query": token, "families": {c["family"] for c in result["candidates"]},
-                          "models": {c["model"] for c in result["candidates"]}})
+                          "rows": {(c["family"], c["model"]) for c in result["candidates"]}})
     return {"kind": "dedicated" if label and units else None, "label": label, "units": units}
 
 
@@ -71,10 +72,11 @@ def _core(catalog, text):
 
 def covers(link, cars, catalog, strict=False):
     """Whether the link names one of the buyer's cars: a table row it found, or (unless strict) a car word of
-    the same brand inside the row's name ("卡罗拉" in "卡罗拉/雷凌 19-25款")."""
+    the same brand inside the row's name ("卡罗拉" in "卡罗拉/雷凌 19-25款"). Rows are compared with their brand:
+    问界 M7 and 风行 M7 are different cars."""
     for unit in link["units"]:
         for car in cars:
-            if car["model"] in unit["models"]:
+            if (car["family"], car["model"]) in unit["rows"]:
                 return True
             core = _core(catalog, unit["query"])
             if (not strict and car["family"] in unit["families"] and len(core) >= 2
@@ -92,8 +94,23 @@ def _pick(docs, titles):
     return next((d for d in docs if d["title"] in titles), docs[0]) if docs else None
 
 
-def _option(title, options):
-    return next((o["option_id"] for o in options if o.get("goods_title") == title), None)
+def _option(title, options, docs):
+    """The sendable card of title, only when one learned product and one option carry it: options name goods by
+    title alone, so a title shared by two products could send the wrong one."""
+    found = [o["option_id"] for o in options if o.get("goods_title") == title]
+    return found[0] if len(found) == 1 and sum(d["title"] == title for d in docs) == 1 else None
+
+
+def _entry(goods):
+    """The goods of the latest goods card (source card or a card the buyer sent), whatever order data came later."""
+    def card_time(g):
+        times = [e.get("observed_at") for e in g.get("evidence") or ()
+                 if isinstance(e, dict) and e.get("source") == "goods_card"]
+        return max((t for t in times if isinstance(t, (int, float))), default=None)
+    carded = [(card_time(g), i, g) for i, g in enumerate(goods) if any(
+        isinstance(e, dict) and e.get("source") == "goods_card" for e in g.get("evidence") or ())]
+    # Newest card first; goods' own order (newest first) breaks ties and orders cards without a time.
+    return max(carded, key=lambda c: (c[0] is not None, c[0] or 0, -c[1]))[2] if carded else None
 
 
 def reply(link):
@@ -114,9 +131,8 @@ def recommend(context, vehicle, docs, describe_doc, catalog):
         return None
     if any(isinstance(o, dict) and OPEN_ORDER.search(str(o.get("status") or "")) for o in context.get("orders") or ()):
         return None
-    goods = [g for g in context.get("goods") or () if isinstance(g, dict) and g.get("product_key")]
-    latest = goods[0] if goods else None
-    if not latest or not any(e.get("source") == "goods_card" for e in latest.get("evidence") or ()):
+    latest = _entry([g for g in context.get("goods") or () if isinstance(g, dict) and g.get("product_key")])
+    if not latest:
         return None
     by_key = {d["product_key"]: d for d in docs}
     entry_doc = by_key.get(latest["product_key"])
@@ -138,7 +154,7 @@ def recommend(context, vehicle, docs, describe_doc, catalog):
     if target is None:
         return None
     link = {"entry": entry["label"], "target": describe_doc(target)["label"] or None, "goods_title": target["title"],
-            "option_id": _option(target["title"], options)}
+            "option_id": _option(target["title"], options, docs)}
     return {**link, "reply": reply(link)}
 
 
@@ -156,5 +172,7 @@ def card_after_recommendation(context, docs, describe_doc):
     wanted = {d["title"] for d, link in described
               if (link["kind"] == "dedicated" and link["label"] == target if target else link["kind"] == "main")}
     options = (context.get("send_options") or {}).get("goods") or []
-    option = next((o["option_id"] for o in options if o.get("goods_title") in wanted), None)
-    return {"type": "goods_card", "option_id": option} if option else None
+    found = {(t, _option(t, options, docs)) for t in wanted}
+    found = [option for _, option in found if option]
+    # One recommended product only: two links of the same label, or one title shared by two products, send none.
+    return {"type": "goods_card", "option_id": found[0]} if len(found) == 1 and len(wanted) == 1 else None

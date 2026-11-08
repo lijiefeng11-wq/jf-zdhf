@@ -90,6 +90,43 @@ class Links(unittest.TestCase):
         self.assertIsNone(self.catalog.link_card(context("好的", titles=[TOYOTA["title"]], before=[("agent", "您好")]), DOCS))
 
 
+    def test_review_fixes(self):
+        # A link of a year the table lacks covers no row: 22款卡罗拉 gets the main link, not the 30款 link.
+        future = {"product_key": "5" * 64, "title": "30款卡罗拉专用遮阳挡", "facts": ["商品名称：30款卡罗拉专用遮阳挡"]}
+        self.assertEqual(self.catalog.recommend_link(context("卡罗拉 22款"), self.catalog.conversation(
+            context("卡罗拉 22款")["messages"]), [WENJIE, future, MAIN])["target"], None)
+        # Two sendable options with the recommended title: no card is chosen by list order.
+        twin = {**TOYOTA, "product_key": "6" * 64}
+        ctx = context("卡罗拉 22款", titles=[TOYOTA["title"], TOYOTA["title"]])
+        link = self.catalog.recommend_link(ctx, self.catalog.conversation(ctx["messages"]), DOCS)
+        self.assertEqual((link["option_id"], link["reply"]), (None, SENTENCE))
+        ctx = context("卡罗拉 22款", titles=[TOYOTA["title"]])
+        self.assertIsNone(self.catalog.recommend_link(ctx, self.catalog.conversation(ctx["messages"]), DOCS + [twin])["option_id"])
+        said = SENTENCE + "，需要链接说一声我发您"
+        follow = context("好的发我", titles=[TOYOTA["title"], TOYOTA["title"]], before=[("buyer", "卡罗拉 22款"), ("agent", said)])
+        self.assertIsNone(self.catalog.link_card(follow, DOCS))
+        # A newer order of another product does not hide the entry card.
+        ctx = context("卡罗拉 22款")
+        ctx["goods"].insert(0, {"goods_ref": "g0", "title": "汽车脚垫", "product_key": OTHER["product_key"],
+                                "evidence": [{"source": "order", "order_ref": "o", "observed_at": 99}]})
+        self.assertEqual(self.recommend(ctx)["target"], "丰田凯美瑞/卡罗拉/雷凌")
+
+
+class CrossBrand(unittest.TestCase):
+    def test_same_model_name_of_another_brand(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for folder, record in (("问界", "SUN-w1"), ("风行", "SUN-f1")):
+                (root / folder).mkdir()
+                (root / folder / (record + ".md")).write_text(document(record=record, model="M7 22-26款", family=folder), encoding="utf-8")
+            catalog = vk.load_directory(root)
+        entry = {"product_key": "7" * 64, "title": "问界M7专用遮阳挡", "facts": []}
+        fengxing = {"product_key": "8" * 64, "title": "风行M7专用遮阳挡", "facts": []}
+        ctx = context("风行M7 24款", entry=entry)
+        link = catalog.recommend_link(ctx, catalog.conversation(ctx["messages"]), [entry, fengxing])
+        self.assertEqual(link["target"], "风行M7")
+
+
 class Engine(unittest.TestCase):
     def decide(self, link, *outputs, allow_send=False):
         ctx = context("卡罗拉 22款", titles=[TOYOTA["title"]])

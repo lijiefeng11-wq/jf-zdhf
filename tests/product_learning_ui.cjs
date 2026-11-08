@@ -45,6 +45,9 @@ function setup(){
  assert.match(n.nodes['product-notes-status'].textContent,/已保存/);assert.equal(n.nodes['product-notes-save'].disabled,false);passed++;
  const bad=n.nodes['product-notes-save'].listeners.click();n.calls.at(-1).reject({code:'invalid_product_notes'});await bad;
  assert.match(n.nodes['product-notes-status'].textContent,/2000/);passed++;
+ n.nodes['product-notes'].value='透光：不透光';const late=n.nodes['product-notes-save'].listeners.click();n.nodes['product-notes'].value='透光：不透光；功能：隔热';
+ n.calls.at(-1).resolve({status:'idle',products:[],notes:'透光：不透光'});await late;
+ assert.equal(n.nodes['product-notes'].value,'透光：不透光；功能：隔热');assert.match(n.nodes['product-notes-status'].textContent,/还没保存/);passed++;
  n.state.selectedShopId='b';n.control.refresh();assert.equal(n.nodes['product-notes'].value,'');passed++;
  console.log(JSON.stringify({passed,actualProductUi:true,platform:false}));
 })().catch(e=>{console.error(e);process.exitCode=1;});

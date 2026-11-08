@@ -88,13 +88,19 @@ window.setupProductLearning = function ({state, request, handleError}) {
   notesSave.addEventListener("click", async () => {
     const c = context();
     if (!c.shop || !c.token || busy) return;
-    busy = true; notesSave.disabled = true; const order = ++seq;
+    busy = true; notesSave.disabled = true; const order = ++seq, sent = notes.value;
     notesStatus.textContent = "正在保存详情要点。";
     try {
       const data = await request("/api/v1/admin/shops/" + encodeURIComponent(c.shop) + "/product-notes", {
-        token: c.token, method: "PUT", body: {notes: notes.value}
+        token: c.token, method: "PUT", body: {notes: sent}
       });
-      if (current(c)) { savedNotes = null; render(data); notesStatus.textContent = data.notes ? "已保存，买家问材质、功能、透光时按要点回答。" : "已清空详情要点。"; }
+      if (current(c)) {
+        // Text typed while the save was on its way stays in the box, unsaved.
+        const typed = notes.value !== sent;
+        savedNotes = sent; render(data);
+        notesStatus.textContent = typed ? "已保存点击时的内容；之后的修改还没保存。" :
+          data.notes ? "已保存，买家问材质、功能、透光时按要点回答。" : "已清空详情要点。";
+      }
     } catch (err) {
       if (current(c)) notesStatus.textContent = err.code === "invalid_product_notes" ? "要点最多 2000 字，请精简后再保存。" : "保存未确认，请刷新后核对。";
     } finally { if (current(c) && order === seq) { busy = false; notesSave.disabled = false; } }
