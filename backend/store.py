@@ -784,7 +784,7 @@ class Store:
         reason = result.get("reason", "")
         if reason == deadlines.REASON:
             return result
-        if reason == "no_matching_rule" or reason.startswith("model:"):
+        if reason == "no_matching_rule" or reason.startswith(("model:", "vehicle_handoff:")):
             kind = "unhandled"
         elif reason == "decision_internal_error" or reason == "model_not_configured" or reason == "vehicle_knowledge_unavailable":
             kind = "error"

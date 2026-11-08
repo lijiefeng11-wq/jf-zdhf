@@ -59,6 +59,10 @@ def validate_config(config):
             "invalid_vehicle_knowledge_config")
     require(all(isinstance(path, str) and Path(path).is_absolute()
                 for path in knowledge.values()), "invalid_vehicle_knowledge_config")
+    # Shops whose replies use the tested vehicle logic (vehicle_lookup_v2); absent means the original lookup.
+    v2 = config.get("vehicle_lookup_v2", [])
+    require(isinstance(v2, list) and all(isinstance(shop, str) and shop in knowledge for shop in v2)
+            and len(set(v2)) == len(v2), "invalid_vehicle_lookup_v2_config")
 
 
 def reject_constant(_):
@@ -645,12 +649,22 @@ class Server(ThreadingHTTPServer):
                 if knowledge:
                     job["product_knowledge"] = knowledge
                 catalog = self.vehicle_catalogs.get(job["shop_id"])
-                if catalog is not None:
+                forced = None
+                if catalog is not None and job["shop_id"] in self.config.get("vehicle_lookup_v2", []):
+                    context = job["payload"]["context"]
+                    found = catalog.conversation(context["messages"], context.get("orders", []))
+                    if found is not None:
+                        forced = found.pop("forced")
+                        job["vehicle_knowledge"] = {**found, "version": 2}
+                elif catalog is not None:
                     # Run in this shop's worker, outside the global store lock and
                     # scheduler. Only authenticated shop ownership selects a catalog.
                     job["vehicle_knowledge"] = catalog.lookup_context(
                         job["payload"]["context"]["messages"])
-                if job.get("vehicle_knowledge", {}).get("status") == "unavailable":
+                if forced:
+                    # The program's own stop (needs_human / ask limit / order with an unclear car): a person takes over.
+                    result = decision("handoff", "vehicle_handoff:" + forced)
+                elif job.get("vehicle_knowledge", {}).get("status") == "unavailable":
                     result = decision("handoff", "vehicle_knowledge_unavailable")
                 elif job.get("deadline_monotonic") is not None:
                     result = modelworker.bounded_decide(
