@@ -210,6 +210,17 @@ describe("去重与重投", () => {
     assert.equal(mock.platformSends[0].text, HOURS_REPLY);
   });
 
+  test("买家消息后才到、带来另一商品的来源卡片使这条消息不再提交", async () => {
+    const { rt, mock } = await shop();
+    const a = mock.seedBuyerHistory("buyer-1", "营业时间？");
+    const title = "平台来源卡片：买家从商品进入";
+    (mock as any).history.get("buyer-1").push({ conversation_id: "buyer-1", platform_message_id: "mock-src-4", role: "system", kind: "card", content: title, created_at: a.created_at + 1, card: { type: "source", title, product_key: "goods-9" } });
+    mock.redeliver(a);
+    await waitFor(() => rt.journal.conversation("buyer-1").notes[a.platform_message_id as string] === "superseded_before_submit", "superseded by product card");
+    assert.equal(eventsOf(rt).length, 0);
+    assert.equal(mock.platformSends.length, 0);
+  });
+
   test("提交后才到的平台自动卡片不使判断失效", async () => {
     const { rt, mock } = await shop({ mode: "observe" });
     const a = mock.injectBuyerMessage({ conversation_id: "buyer-1", content: "营业时间？" });

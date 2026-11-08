@@ -794,6 +794,7 @@ export class ShopRuntime {
     if (conv.messages.length > MAX_CONTEXT_MESSAGES) return this.journal.note(conversationId, messageId, "context_too_large");
     if (conv.messages.some((m) => m.content.length > MAX_CONTENT_CHARS)) return this.journal.note(conversationId, messageId, "content_too_long");
     // 契约要求买家这条在最后、时间不倒退：晚到的平台自动卡片（进店来源等）移到它前面，时间记为它的时间。
+    // 这些卡片不带新商品（见 turnEnd），合并时间不影响商品证据的先后。
     const at = conv.messages.indexOf(last);
     const ordered = [...conv.messages.slice(0, at), ...conv.messages.slice(at + 1).map((m) => ({ ...m, created_at: last.created_at })), last];
     const messages: ContextMessage[] = ordered.map((m) => ({ id: m.id, role: m.role, kind: m.kind, content: m.content, created_at: m.created_at, ...(m.card ? { card: m.card } : {}) }));
@@ -1495,10 +1496,13 @@ function platformCard(m: StoredMessage): boolean {
   return m.role === "system" && m.kind === "card" && (m.card?.type === "source" || m.card?.type === "system");
 }
 
-/** 对话当前这一轮的最后一条：跳过排在末尾的平台自动卡片（它们常比买家消息晚一两秒到）。 */
+/** 对话当前这一轮的最后一条：跳过排在末尾的平台自动卡片（它们常比买家消息晚一两秒到）。
+ *  末尾卡片带来不同的商品时不跳过：商品上下文已变，这一轮不再以那条买家消息为准。 */
 export function turnEnd(messages: readonly StoredMessage[]): StoredMessage | undefined {
   let i = messages.length - 1;
   while (i > 0 && platformCard(messages[i])) i -= 1;
+  const known = messages.slice(0, i + 1).findLast((m) => m.card?.product_key)?.card?.product_key;
+  if (messages.slice(i + 1).some((m) => m.card?.product_key && m.card.product_key !== known)) return messages[messages.length - 1];
   return messages[i];
 }
 
