@@ -863,12 +863,19 @@ conflicts 为可能冲突的现有规则 ID，不能保证发现所有语义冲�
 - `POST /api/v1/admin/shops/{shop_id}/product-learning`，管理员会话、非初始密码；请求恰为 `{source_url:string}`。空值表示当前所选店铺。可接受 HTTPS 拼多多店铺/商品链接，商品链接必须有 goods_id；只提取 goods_id/mall_id 作为客户端选择条件，后台不请求该 URL，不支持任意网址。带 mall_id 时须与当前平台店铺相同；只有分享参数的链接不能独立证明店铺，界面明确实际读取的是当前所选店铺。返回 202 的状态对象。
 - 新请求替代同店旧任务、清理旧暂存；不删除已发布知识，不改模型、话术、店铺启用或运行模式。
 - `GET` 同一路径返回 `{status,processed,catalog_count,client_ready,products,...}`；存在任务时另含 request_id、total、details_incomplete、updated_at，结束时含 catalog_complete 或固定 error。status 为 `idle/queued/collecting/learning/completed/partial/failed`。processed 是已完成分类的件数，total 是平台列表报告数，未知为 null；均不表示真实业务验收。
-- products 为最近 20 件的预览 `{title,category,facts,details_complete}`，facts 是捕获的原文，安全文本渲染；换店、退出或页面会话变化后不应用迟到响应。
+- products 为最近 20 件的预览 `{title,category,facts,details_complete,link}`，facts 是捕获的原文，安全文本渲染；换店、退出或页面会话变化后不应用迟到响应。link 为空、`大链接（下单留言车型）` 或 `专车链接：<车名>`。
+- 状态另含 notes（本店详情页要点）。`PUT /api/v1/admin/shops/{shop_id}/product-notes` 请求恰为 `{notes:string}`，最多 2000 字（去首尾空白后保存）、不得含 NUL，否则 400 `invalid_product_notes`；空值清除。保存后递增该店 settings.version，返回状态对象。要点作为数据随本店每次模型判断提供，用于回答材质、功能、透光等；要点没写的不得编造。
+
+### 大链接与专车链接
+
+- 后台按已学商品判断链接类型：规格组合含“留言车型/备注车型”的是大链接（表里有的车都可下单留言车型）；否则标题“…专用/专车专用/定制”前的车名（“/”分隔，裸型号沿用首个车名的品牌）或属性“适用车型”能在车型表查到的，是专车链接，其规格首项（如 `【26款】问界m7`）一并作为可做车型。其他商品不分类。
+- 仅当买家最近的来源/商品卡片（goods_card 证据）是专车链接、车型查表为 matched/ambiguous、没有未完成订单，且该链接不含买家的车时，以 vehicle_other_link 替代 vehicle_fit：优先同车的专车链接（同品牌时须精确到车型），没有则大链接；句式固定为“您进来的是X专车链接，您的车需要拍「Y」专车链接/店里下单留言车型的通用链接，我给您记录车型”。目标链接在本会话可发送商品里时句尾加“需要链接说一声我发您”，买家下一条消息时以 vehicle_link_card 发该商品卡片（仍受发送能力门控，每事件一个动作）。不学、不报价格。
 
 ### 客户端只读任务与分批上传
 
 - 已确认能力的当前租约心跳可收到 `product_learning:{request_id,selection:{goods_id?,mall_id?},expires_at}`。request_id 为 32 位小写十六进制，expires_at 为 Unix 秒。任务初始有效 1800 秒；绑定接收时的 client_id/instance_id/session_id/generation，同页操作还须核对原窗口/页面代次、登录及平台店铺。失效停止后续读取，未知上传不重新采集/重投。
 - 只用当前 `https://mms.pinduoduo.com` 页面的原有请求方式：GET `/chats/userinfo/realtime` 核对身份；POST `/latitude/goods/queryGoods` `{pageNo,pageSize:20,status:1,goodsId?}` 分页；POST `/latitude/goods/goodsProperties`、`/latitude/goods/skuSelectorForMall` `{goodsId}` 获取文本属性和整组 SKU。这些仅是商品查询，不开放任意 URL/请求方法。每次页面读取有超时，失败不暴露响应或异常原文。
+- 规格组合按首项分组为一行（如 `规格组合：款式："问界m5"；型号："前挡1片"、"尾挡1片"`），单行超 1000 字前拆行；形状不一的组保留整条组合。
 - 按列表 total 继续分页，不以推荐商品列表代替整店。重复页、总数变化、空页未达总数或详情字段不全均明确不完整，不宣称全部已学。单品属性/规格失败可保留该品可读文本并标记不完整。当前只涵盖所读在售列表及文本，不包含纯图片详情、OCR、下架商品全量性或价格/库存实时性。
 - `POST /api/v1/product-learning/{request_id}`：店铺客户端凭据；请求恰为 `{instance_id,session_id,generation,seq,products,total,finished,catalog_complete,error}`。seq 从 0 递增，严格整数；total 为 null 或 0–1000000 整数；finished/catalog_complete 为布尔。每个 product 恰为 `{product_key,title,facts,details_complete}`，title 1–200 字、facts 最多 80 条各 1–1000 字、details_complete 布尔，key 每次任务内唯一。最多 30 件且总请求仍受原 256 KiB 限制，客户端通常每批不超过 3 件/20000 字，不丢后续商品。
 - 正常 error 为 null。取消读任务时 products 为空、error 固定为 `product_page_unavailable/product_source_changed/product_list_invalid/product_details_failed/product_upload_failed/product_collection_timeout` 之一。允许在原 owner 的分类处理中取消；晚到模型结果不得继续发布。后台模型失败固定 `product_learning_failed`。

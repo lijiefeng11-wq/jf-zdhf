@@ -84,7 +84,8 @@ class FictionalTable(unittest.TestCase):
     def test_order_talk_after_an_unknown_car_names_no_car(self):
         # The table lacks the earlier car; "下单了" must never be answered with the no-size sentence.
         for text in ("下单了", "尽快发货", "快点", "还要备注吗？", "你给我备注一下", "你帮我备注一下，我下单了",
-                     "我拍了给我备份车型年份", "怎么没发货呢", "已经下单了麻烦尽快发货", "今天能发货不"):
+                     "我拍了给我备份车型年份", "怎么没发货呢", "已经下单了麻烦尽快发货", "今天能发货不",
+                     "好的发我", "发我链接", "链接发一下"):
             with self.subTest(text=text):
                 result = self.talk(("buyer", "完全没有的车 2025"), ("agent", "x"), ("buyer", text), orders=[{"status": "待发货"}])
                 self.assertEqual((result["status"], result["forced"]), ("no_vehicle", None))
