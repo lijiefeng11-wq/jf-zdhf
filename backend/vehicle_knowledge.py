@@ -152,6 +152,17 @@ class VehicleCatalog:
         """The link a matched car needs when the buyer came in through another car's dedicated link, or None."""
         return productlinks.recommend(context, vehicle, docs, self.describe_link, self._v2)
 
+    def card_greeting(self, context, docs):
+        """The fixed sentence for a sunshade goods card the buyer sent, unless they already named a car the table has."""
+        texts = [text for _, text in vehicle_match._buyer_turns(context.get("messages") or [])]
+        # "26款问界M7" … "透光吗" / "谢谢" … card: the car named before the goods talk still counts.
+        while texts and vehicle_match._no_car_words(texts[-1]):
+            texts.pop()
+        texts = texts[-vehicle_match.MAX_TURNS:]
+        if texts and vehicle_match._turn(self._v2, texts)[0]["status"] in (*vehicle_match.MATCH_STATUSES, "needs_year", "year_mismatch"):
+            return None
+        return productlinks.card_greeting(context, docs, self.describe_link)
+
     def link_card(self, context, docs):
         """The goods card of the link the previous reply recommended, when sendable now, or None."""
         return productlinks.card_after_recommendation(context, docs, self.describe_link)

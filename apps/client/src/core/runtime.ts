@@ -609,8 +609,12 @@ export class ShopRuntime {
     const id = stable ? (m.platform_message_id as string) : `local-${randomUUID()}`;
     const stored: StoredMessage = { id, stable, role: m.role, kind: m.kind, content: m.content, created_at: m.created_at, ...(m.card ? { card: m.card } : {}), ...(m.image_ref ? { image_ref: m.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, live, session_id: this.sessionId };
     this.replyTiming.observe(stored, true);
+    const known = this.journal.conversation(m.conversation_id).messages.findLast((x) => x.card?.product_key)?.card?.product_key;
     this.journal.addMessage(m.conversation_id, stored);
-    this.journal.bumpRevision(m.conversation_id, live ? `message:${m.role}` : "history_sync");
+    // 平台自动卡片不使已提交的判断失效：买家的问题不变，下一轮提交时照常带上它；
+    // 但卡片带来不同的商品时，商品上下文已变，旧判断仍须失效。
+    const sameProduct = !stored.card?.product_key || stored.card.product_key === known;
+    if (!(platformCard(stored) && sameProduct)) this.journal.bumpRevision(m.conversation_id, live ? `message:${m.role}` : "history_sync");
     if (!stable) return this.journal.note(m.conversation_id, id, "no_stable_id");
     if (!live) return this.journal.note(m.conversation_id, id, "history_sync");
     if (m.role !== "buyer") return;
@@ -625,7 +629,7 @@ export class ShopRuntime {
     const conv = this.journal.conversation(conversationId);
     const stored = conv.messages.find((x) => x.id === messageId);
     if (!stored || stored.live || stored.role !== "buyer") return false;
-    if (conv.messages[conv.messages.length - 1]?.id !== messageId || this.journal.eventForMessage(conversationId, messageId)) return false;
+    if (turnEnd(conv.messages)?.id !== messageId || this.journal.eventForMessage(conversationId, messageId)) return false;
     this.journal.bumpRevision(conversationId, "message:buyer");
     this.journal.note(conversationId, messageId, "promoted_live");
     this.track(this.submitNew(conversationId, messageId));
@@ -656,7 +660,7 @@ export class ShopRuntime {
       if (this.inFlight.has(conversationId)) continue;
       this.pendingPreparation.delete(conversationId);
       const conv = this.journal.conversation(conversationId);
-      if (pending.sessionId !== this.sessionId || conv.takeover || conv.messages.at(-1)?.id !== pending.messageId) continue;
+      if (pending.sessionId !== this.sessionId || conv.takeover || turnEnd(conv.messages)?.id !== pending.messageId) continue;
       if (this.journal.eventForMessage(conversationId, pending.messageId) || this.expired(conversationId, pending.messageId)) continue;
       this.track(this.submitNew(conversationId, pending.messageId));
     }
@@ -784,12 +788,16 @@ export class ShopRuntime {
     if (this.expired(conversationId, messageId)) return;
     this.log(`timing conv=${this.refs.conv(conversationId)} step=prepare history_ms=${historyDone - prepStart} orders_ms=${ordersDone - historyDone} options_ms=${Date.now() - ordersDone} budget_ms=${this.timing.prepBudgetMs}${withOptions ? " orders_in_options=true" : ""}`);
     const conv = this.journal.conversation(conversationId);
-    const last = conv.messages[conv.messages.length - 1];
+    const last = turnEnd(conv.messages);
     if (!last || last.id !== messageId) return this.journal.note(conversationId, messageId, "superseded_before_submit");
     if (this.sessionId !== session) return this.journal.note(conversationId, messageId, "session_changed");
     if (conv.messages.length > MAX_CONTEXT_MESSAGES) return this.journal.note(conversationId, messageId, "context_too_large");
     if (conv.messages.some((m) => m.content.length > MAX_CONTENT_CHARS)) return this.journal.note(conversationId, messageId, "content_too_long");
-    const messages: ContextMessage[] = conv.messages.map((m) => ({ id: m.id, role: m.role, kind: m.kind, content: m.content, created_at: m.created_at, ...(m.card ? { card: m.card } : {}) }));
+    // 契约要求买家这条在最后、时间不倒退：晚到的平台自动卡片（进店来源等）移到它前面，时间记为它的时间。
+    // 这些卡片不带新商品（见 turnEnd），合并时间不影响商品证据的先后。
+    const at = conv.messages.indexOf(last);
+    const ordered = [...conv.messages.slice(0, at), ...conv.messages.slice(at + 1).map((m) => ({ ...m, created_at: last.created_at })), last];
+    const messages: ContextMessage[] = ordered.map((m) => ({ id: m.id, role: m.role, kind: m.kind, content: m.content, created_at: m.created_at, ...(m.card ? { card: m.card } : {}) }));
     if (!this.capabilities.has(CAP_PRODUCT_KNOWLEDGE)) {
       for (const message of messages) if (message.card?.product_key) {
         const { product_key: _key, ...card } = message.card;
@@ -1094,7 +1102,7 @@ export class ShopRuntime {
     if (ev.instance_id !== this.instanceId) return "instance_changed";
     if (!this.leaseValid(ev.generation)) return "lease_invalid";
     if (conv.revision !== ev.context_revision) return "superseded";
-    if (conv.messages[conv.messages.length - 1]?.id !== ev.message_id) return "superseded";
+    if (turnEnd(conv.messages)?.id !== ev.message_id) return "superseded";
     if (!ev.text_only) return "unsupported_content";
     const decision = ev.snapshot?.decision;
     if (!decision || ev.snapshot?.state !== "ready") return "not_ready";
@@ -1481,6 +1489,21 @@ export class ShopRuntime {
   async refresh() {
     await this.tick();
   }
+}
+
+/** 平台在买家进店时自动推送的来源卡片/系统提示卡片：不是买家所发，不算新的一轮。 */
+function platformCard(m: StoredMessage): boolean {
+  return m.role === "system" && m.kind === "card" && (m.card?.type === "source" || m.card?.type === "system");
+}
+
+/** 对话当前这一轮的最后一条：跳过排在末尾的平台自动卡片（它们常比买家消息晚一两秒到）。
+ *  末尾卡片带来不同的商品时不跳过：商品上下文已变，这一轮不再以那条买家消息为准。 */
+export function turnEnd(messages: readonly StoredMessage[]): StoredMessage | undefined {
+  let i = messages.length - 1;
+  while (i > 0 && platformCard(messages[i])) i -= 1;
+  const known = messages.slice(0, i + 1).findLast((m) => m.card?.product_key)?.card?.product_key;
+  if (messages.slice(i + 1).some((m) => m.card?.product_key && m.card.product_key !== known)) return messages[messages.length - 1];
+  return messages[i];
 }
 
 function pendingReceipt(status: ReceiptStatus, platformMessageId: string | null = null, extra?: ReceiptExtra): ReceiptRecord {

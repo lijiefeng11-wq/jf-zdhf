@@ -670,6 +670,10 @@ class Server(ThreadingHTTPServer):
                     card = catalog.link_card(context, docs) if docs else None
                     if link or card:
                         job["vehicle_link"] = {**({"reply": link["reply"]} if link else {}), **({"card": card} if card else {})}
+                    # The buyer sent a sunshade goods card: say what that link is and ask for the car.
+                    greeting = catalog.card_greeting(context, docs) if docs else None
+                    if greeting:
+                        job["card_greeting"] = greeting
                 elif catalog is not None:
                     # Run in this shop's worker, outside the global store lock and
                     # scheduler. Only authenticated shop ownership selects a catalog.

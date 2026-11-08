@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from backend import vehicle_knowledge as vk
-from backend.engine import model_decide
+from backend.engine import decide, model_decide
 from backend.productcatalog import ProductCatalog
 from backend.store import ApiError, Store
 from test_vehicle_knowledge import document
@@ -90,6 +90,29 @@ class Links(unittest.TestCase):
         self.assertIsNone(self.catalog.link_card(context("好的", titles=[TOYOTA["title"]], before=[("agent", "您好")]), DOCS))
 
 
+    def test_goods_card_greeting(self):
+        def sent(doc, before=(), orders=None):
+            ctx = {"messages": [*messages(*before), {"id": "card", "role": "buyer", "kind": "card", "content": "商品卡片：" + doc["title"],
+                                                     "created_at": 100, "card": {"type": "goods", "product_key": doc["product_key"]}}]}
+            if orders is not None:
+                ctx["orders"] = orders
+            return self.catalog.card_greeting(ctx, DOCS)
+        self.assertEqual(sent(MAIN), "这是汽车遮阳挡 专车专用的 您什么车用呢？")
+        self.assertEqual(sent(WENJIE), "您好 这是问界专用遮阳挡 亲问界什么车用呢？")
+        self.assertEqual(sent(TOYOTA, before=[("buyer", "在吗")]), "您好 这是丰田专用遮阳挡 亲丰田什么车用呢？")
+        # Not a sunshade, a car already named, or an order already placed: no fixed sentence.
+        self.assertIsNone(sent(OTHER))
+        self.assertIsNone(sent(WENJIE, before=[("buyer", "26款问界M7")]))
+        for later in ("透光吗", "谢谢"):
+            with self.subTest(later=later):
+                self.assertIsNone(sent(MAIN, before=[("buyer", "26款问界M7"), ("buyer", later)]))
+        self.assertIsNone(sent(MAIN, orders=[{"status": "待发货"}]))
+        # Only the card the buyer sent last: a text after it is answered as usual.
+        ctx = context("透光吗")
+        ctx["messages"].insert(0, {"id": "card", "role": "buyer", "kind": "card", "content": "商品卡片", "created_at": 0,
+                                   "card": {"type": "goods", "product_key": MAIN["product_key"]}})
+        self.assertIsNone(self.catalog.card_greeting(ctx, DOCS))
+
     def test_review_fixes(self):
         # A link of a year the table lacks covers no row: 22款卡罗拉 gets the main link, not the 30款 link.
         future = {"product_key": "5" * 64, "title": "30款卡罗拉专用遮阳挡", "facts": ["商品名称：30款卡罗拉专用遮阳挡"]}
@@ -165,6 +188,17 @@ class Engine(unittest.TestCase):
         self.assertEqual((result["action"], result["item"]), ("send_item", card))
         _, post = self.decide({"card": card}, {"action": "reply", "text": "好的", "reason": "x"})
         self.assertNotIn("vehicle_link_card", post.call_args.args[1]["messages"][0]["content"])  # Not without send_item.
+
+    def test_card_greeting_is_sent_without_the_model(self):
+        ctx = {"messages": [{"id": "card", "role": "buyer", "kind": "card", "content": "商品卡片", "created_at": time.time() - 1,
+                             "card": {"type": "goods", "title": "商品"}}], "history_complete": True}
+        job = {"payload": {"received_at": time.time(), "context": ctx}, "card_greeting": "这是汽车遮阳挡 专车专用的 您什么车用呢？",
+               "settings": {"enabled": True, "mode": "hybrid", "system_prompt": "", "rules": []}}
+        with patch("backend.engine._post") as post:
+            result = decide(job, {"primary": SLOT})
+        post.assert_not_called()
+        self.assertEqual((result["action"], result["reason"], result["text"]),
+                         ("reply", "goods_card_greeting", "这是汽车遮阳挡 专车专用的 您什么车用呢？"))
 
     def test_notes_reach_the_model(self):
         with patch("backend.engine._post", return_value=completion({"action": "reply", "text": "钛银布，双面黑不透光", "reason": "x"})) as post:
