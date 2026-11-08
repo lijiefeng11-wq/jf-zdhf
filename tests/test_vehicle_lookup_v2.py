@@ -90,6 +90,29 @@ class FictionalTable(unittest.TestCase):
             with self.subTest(turns=turns):
                 self.assertEqual(self.talk(*turns)["status"], "no_vehicle")
 
+    def test_review_fixes(self):
+        # A stated seat count the table does not have is a question, never a fit.
+        self.assertEqual(self.talk(("buyer", "示例旅行车 6座"))["status"], "needs_model")
+        # The latest year replaces the earlier one, and a bare 2-digit answer is a year.
+        fixed = self.talk(("buyer", "示例车A 18款"), ("agent", "表里是20-24款，是这款吗？"), ("buyer", "22款"))
+        self.assertEqual((fixed["status"], fixed["forced"]), ("matched", None))
+        bare = self.talk(("buyer", "示例车A"), ("agent", "哪一年？"), ("buyer", "22"))
+        self.assertEqual(bare["status"], "matched")
+        # A denied car is never approved.
+        self.assertNotIn(self.talk(("buyer", "不是星河远航，是完全没有的车"))["status"], vehicle_match.MATCH_STATUSES)
+
+    def test_brand_said_picks_its_rows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for folder, record in (("问界", "SUN-w1"), ("风行", "SUN-f1")):
+                (root / folder).mkdir()
+                (root / folder / (record + ".md")).write_text(document(record=record, model="M7 22-26款", family=folder), encoding="utf-8")
+            catalog = vk.load_directory(root)
+            result = catalog.conversation(messages(("buyer", "问界M7 24款")))
+            self.assertEqual(result["status"], "matched")
+            self.assertEqual(result["candidates"], [{"family": "问界", "model": "M7 22-26款"}])
+            self.assertEqual(catalog.conversation(messages(("buyer", "M7 24款")))["status"], "needs_model")
+
     def test_latest_non_text_has_no_lookup(self):
         msgs = messages(("buyer", "示例车A"))
         msgs.append({**msgs[0], "id": "img", "kind": "image", "content": "[图片]"})
@@ -144,6 +167,11 @@ class EngineV2(unittest.TestCase):
         result, post = self.decide(vehicle, {"action": "reply", "text": "可以用的亲", "reason": "x"},
                                    {"action": "reply", "text": "请问是哪一年的？", "reason": "x"})
         self.assertEqual((result["text"], len(post.call_args_list)), ("请问是哪一年的？", 2))
+        # Even when matched, a self-written fit claim is not the fixed sentence and is rejected.
+        matched = {"status": "matched", "hint": "表内匹配", "candidates": [], "follow_up": False}
+        result, post = self.decide(matched, {"action": "reply", "text": "可以用，终身保修", "reason": "x"},
+                                   {"action": "reply", "rule_id": "vehicle_fit", "text": "", "reason": "x"})
+        self.assertEqual((result["text"], len(post.call_args_list)), (vehicle_match.FIT_REPLY, 2))
 
     def test_shop_rules_are_kept(self):
         ctx = {"messages": messages(("buyer", "几天发货")), "history_complete": True}

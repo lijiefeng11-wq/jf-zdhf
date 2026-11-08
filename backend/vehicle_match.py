@@ -621,6 +621,18 @@ class Catalog:
             # The table dates this car and the stated year is in none of its ranges: no match, even
             # though undated variants (双擎E+) remain.
             rows, total, candidates = [], 0, []
+        if brands_said and not brand_only and len(named) > 1:
+            # "问界M7 24款" when 问界 and 风行 both have an M7: the brand the buyer said picks its own rows.
+            accepted = set(brands_said) | {sub for b in brands_said for sub in PARENT_BRANDS.get(b, ())}
+            by_id = {self.records[i]["record_id"]: self._prepared[i] for i in indexes}
+            own = {item["directory"] for item in by_id.values() if item["directory"] in accepted} & named
+            if len(own) == 1:
+                rows = [c for c in rows if by_id[c["record_id"]]["directory"] in own]
+                total, candidates, named = len(rows), rows[:limit], own
+                year_matched = sum(1 for c in rows if c["year_match"]["status"] == "match")
+                spans = {(next((n["years"] for n in by_id[c["record_id"]]["names"] if n["years"]), None),
+                          frozenset(n["generation"] for n in by_id[c["record_id"]]["names"] if n["generation"] is not None))
+                         for c in rows} - {(None, frozenset())}
         if brand_only or (total and len(named) != 1):
             status = "needs_model"
         elif total == 1 or year_matched == 1:
@@ -647,7 +659,8 @@ class Catalog:
                 rows = [c for c in rows if seat_of(c) == said[1]]
                 total, candidates = len(rows), rows[:limit]
                 status = "matched" if total == 1 else "ambiguous"
-            elif not said and len(offered) > 1:
+            elif len(offered) > 1:
+                # Not said, or said but not in the table ("6座" when only 5座 / 7座 exist): ask, never fit.
                 status, seats = "needs_model", sorted(offered)
         if status == "not_found" and indexes and (years or generations) and words:
             # The car is in the table but not with the stated year / generation (21年的问界M7, 十二代思域):
@@ -734,6 +747,7 @@ AFFIRM = re.compile(r"(?:是|是的|对|对的|嗯|嗯嗯|没错|就是|就是�
 FOLLOW_UP_FILLER = re.compile(r"我的是|我的|我家的|就是|请问|您好|你好|谢谢|好的|在吗|在么|能用吗|能装吗|可以吗|可以用吗|"
                               r"年份|年款|款式|的|是|呢|吗|款|年|版|车|哦|啊|呀|哈|嗯|对|亲|那|三厢|两厢")
 GREETING = re.compile(r"在吗|在么|在嘛|在不在|在的|人呢|有人吗|老板|客服|你好|您好|哈喽|hello|hi|嗯|哦|好的|谢谢|麻烦|请问")
+NEGATION = re.compile(r"不是|并非|不要这个|没有这个|不对")
 NO_VEHICLE_HINT = ("最新买家消息没有说出车名：买家在问能不能用就请他发具体车型和年款；"
                    "其他问题按店铺规则回答。不要说查不到车型")
 ORDER_CLOSED = re.compile(r"取消|关闭|退款成功|已退款|待支付|待付款")
@@ -793,7 +807,15 @@ def _turn(catalog, texts):
             extras.insert(0, text)
             continue
         affirmed = any(AFFIRM.fullmatch(re.sub(r"[\s，。？！,.?!~～]", "", _normalize(e))) for e in extras)
-        added = " ".join(e for e in extras if not AFFIRM.fullmatch(re.sub(r"[\s，。？！,.?!~～]", "", _normalize(e))))
+        answers = [re.sub(r"(?<![a-z0-9])(\d{2})(?![a-z0-9款年])", r"\1款", _normalize(e)) for e in extras
+                   if not AFFIRM.fullmatch(re.sub(r"[\s，。？！,.?!~～]", "", _normalize(e)))]
+        dated = [a for a in answers if _query_year(a)]
+        if dated:
+            # The latest year the buyer gave replaces any earlier one ("18款" ... "22款"): only it is searched.
+            for pattern in (YEAR_RANGE, SINGLE_YEAR, GLUED_YEAR):
+                text = pattern.sub(" ", text)
+            answers = [a for a in answers if not _query_year(a)] + dated[-1:]
+        added = " ".join(answers)
         result = catalog.search((text + " " + added).strip())
         if result["status"] not in ("not_found", "needs_human") and not _named(catalog, text):
             return catalog.search(""), False  # Rows found only through a stray digit or character.
@@ -834,6 +856,10 @@ def conversation(catalog, messages, orders=()):
                           or (status == "not_found" and any(re.search(r"车型|车名|哪款|哪一款|哪年|年份|年款", r) for r in replies))):
             asks, last_asked = asks + 1, status
     result, followed = _turn(catalog, texts)
+    if result["status"] in MATCH_STATUSES and NEGATION.search(_normalize(texts[-1])):
+        # "不是星河远航，是…": the name found may be the car the buyer denies; ask instead of approving it.
+        result = {**result, "status": "needs_model",
+                  "hint": "买家的话里否认了某款车，表内找到的可能正是被否认的车：请买家直接说出自己的车型和年款"}
     if result["status"] == "not_found" and not followed and _no_car_words(texts[-1]):
         result = {**result, "status": "no_vehicle", "hint": NO_VEHICLE_HINT}
     status = result["status"]

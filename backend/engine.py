@@ -377,7 +377,8 @@ def model_decide(context, settings, config, allow_send=False, *, deadline_monoto
                 if (vehicle_context.get("status") in vehicle_match.MATCH_STATUSES
                         and re.sub(r"\s", "", value) == re.sub(r"\s", "", vehicle_match.FIT_REPLY)):
                     rule = next(r for r in rules if r["id"] == "vehicle_fit")  # The exact sentence, spaces included.
-                elif vehicle_context.get("status") not in vehicle_match.MATCH_STATUSES and VEHICLE_CLAIM.search(value):
+                elif VEHICLE_CLAIM.search(value):
+                    # Fit is only ever the server's fixed sentence; a self-written "可以用" is unverified.
                     raise ProviderFailure("vehicle_claim_unverified")
             if rule is None and action == "reply" and reply_limit is not None and len(re.sub(r"\s", "", value)) > reply_limit:
                 raise ProviderFailure("reply_too_long")
