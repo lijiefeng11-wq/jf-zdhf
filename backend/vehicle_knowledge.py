@@ -7,6 +7,8 @@ import stat
 import time
 import unicodedata
 
+from . import vehicle_match
+
 MAX_FILES = 5000
 MAX_FILE_BYTES = 65536
 MAX_TOTAL_BYTES = 16 * 1024 * 1024
@@ -96,9 +98,18 @@ def _matcher(name):
 
 
 class VehicleCatalog:
-    def __init__(self, records):
+    def __init__(self, records, directories=None):
         self._records = tuple(records)
         self.record_count = len(self._records)
+        # vehicle_lookup_v2: the shop's tested matcher, using each record's brand folder and the shipped word lists.
+        folders = tuple(directories) if directories is not None else ("",) * len(self._records)
+        _require(len(folders) == len(self._records), "invalid_vehicle_directory")
+        try:
+            self._v2 = vehicle_match.Catalog(
+                [{"record_id": r["record_id"], "family": r["family"], "model": r["model"], "directory": d}
+                 for r, d in zip(self._records, folders)], vehicle_match.load_aliases())
+        except vehicle_match.CatalogError:
+            raise VehicleKnowledgeError("invalid_vehicle_aliases") from None
         aliases = {}
         for index, record in enumerate(self._records):
             for name in _aliases(record):
@@ -121,6 +132,10 @@ class VehicleCatalog:
         matches = [self._records[index] for index in sorted(matched)]
         return {"status": "not_found" if not matches else "matched" if len(matches) == 1 else "ambiguous",
                 "candidates": copy.deepcopy(matches[:5]), "total_matches": len(matches), "truncated": len(matches) > 5}
+
+    def conversation(self, messages, orders=()):
+        """vehicle_lookup_v2: the latest buyer turn's status, hint and program stop; None without a text turn."""
+        return vehicle_match.conversation(self._v2, messages, orders)
 
     def lookup_context(self, messages):
         """Keep a recent buyer's model for a bare year/window/greeting, never guess a new model."""
@@ -154,7 +169,7 @@ def load_directory(path):
         root = Path(path)
         _require(root.is_absolute() and root.is_dir() and not root.is_symlink(), "invalid_vehicle_directory")
         root = root.resolve()  # macOS /var is itself a system directory alias.
-        records, ids, total, entries = [], set(), 0, 0
+        records, folders, ids, total, entries = [], [], set(), 0, 0
 
         def walk_error(_):
             raise VehicleKnowledgeError("unreadable_vehicle_directory")
@@ -179,8 +194,9 @@ def load_directory(path):
                 _require(record["record_id"] not in ids, "duplicate_vehicle_record")
                 ids.add(record["record_id"])
                 records.append(record)
+                folders.append(Path(directory).name)
         _require(records, "empty_vehicle_directory")
-        return VehicleCatalog(records)
+        return VehicleCatalog(records, folders)
     except VehicleKnowledgeError:
         raise
     except (OSError, UnicodeError, TypeError, ValueError):
