@@ -110,6 +110,16 @@ class Links(unittest.TestCase):
         ctx["goods"].insert(0, {"goods_ref": "g0", "title": "汽车脚垫", "product_key": OTHER["product_key"],
                                 "evidence": [{"source": "order", "order_ref": "o", "observed_at": 99}]})
         self.assertEqual(self.recommend(ctx)["target"], "丰田凯美瑞/卡罗拉/雷凌")
+        # Only a link selling the same thing: a 卡罗拉 floor mat never replaces the sunshade's main link.
+        mat = {"product_key": "9" * 64, "title": "卡罗拉专用汽车脚垫", "facts": ["商品名称：卡罗拉专用汽车脚垫"]}
+        plain = context("卡罗拉 22款", titles=[mat["title"]])
+        link = self.catalog.recommend_link(plain, self.catalog.conversation(plain["messages"]), [WENJIE, mat, MAIN])
+        self.assertEqual((link["target"], link["option_id"]), (None, None))
+        follow = context("好的发我", titles=[mat["title"]], before=[("buyer", "卡罗拉 22款"), ("agent", said)])
+        self.assertIsNone(self.catalog.link_card(follow, [WENJIE, mat, MAIN]))
+        unknown = {**WENJIE, "title": "问界m5/m7专用汽车用品"}
+        plain = context("卡罗拉 22款", entry=unknown)
+        self.assertIsNone(self.catalog.recommend_link(plain, self.catalog.conversation(plain["messages"]), [unknown, TOYOTA, MAIN]))
         # A newer card without a learned product: the older entry card no longer decides.
         ctx["goods"].insert(0, {"goods_ref": "g9", "title": "别的商品", "evidence": [{"source": "goods_card", "message_id": "m9", "observed_at": 50}]})
         self.assertIsNone(self.recommend(ctx))

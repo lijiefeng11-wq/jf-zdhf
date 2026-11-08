@@ -16,6 +16,9 @@ BRACKET = re.compile(r"[【\[]([^】\]]*)[】\]]")
 LEAD = re.compile(r"[\u4e00-\u9fff]+")
 # A year the table lacks ("30款卡罗拉") only finds nearby rows to ask about: the link names none of them.
 CAR_STATUSES = ("matched", "ambiguous", "needs_year")
+# What a link sells, by the first product word of its title: a link is only ever swapped for one selling the same.
+PRODUCT = re.compile(r"遮阳挡|遮阳板|遮阳帘|遮阳伞|遮光帘|隐私帘|窗帘|伞罩|车衣|车罩|脚垫|地垫|地毯|后备箱垫|尾箱垫|座套|座垫|坐垫|"
+                     r"靠枕|头枕|腰靠|方向盘套|充电垫|防滑垫|储物盒|收纳盒|置物盒|杯架|挂钩|香薰|贴膜|太阳膜|雨刮|雨刷|灯")
 OPEN_ORDER = re.compile(r"待发货|待收货|已发货|待付款|待成团|已签收")
 LINK_SENTENCE = re.compile(r"^您进来的是(.+?)专车链接，您的车需要拍(?:「(.+?)」专车链接|店里下单留言车型的通用链接)，"
                            r"我给您记录车型，需要链接说一声我发您$")
@@ -113,6 +116,11 @@ def _entry(goods):
     return max(carded, key=lambda c: (c[0] is not None, c[0] or 0, -c[1]))[2] if carded else None
 
 
+def _product(doc):
+    found = PRODUCT.search(doc.get("title") or "")
+    return found.group(0) if found else None
+
+
 def reply(link):
     target = f"「{link['target']}」专车链接" if link["target"] else "店里下单留言车型的通用链接"
     text = f"您进来的是{link['entry']}专车链接，您的车需要拍{target}，我给您记录车型"
@@ -143,10 +151,14 @@ def recommend(context, vehicle, docs, describe_doc, catalog):
     cars = vehicle["candidates"]
     if entry["kind"] != "dedicated" or covers(entry, cars, catalog):
         return None
+    sells = _product(entry_doc)
+    if sells is None:
+        return None  # Unsure what the entry link sells: never swap it for another link.
     same_brand = bool({c["family"] for c in cars} & _families(entry))
     options = (context.get("send_options") or {}).get("goods") or []
     titles = {o.get("goods_title") for o in options}
-    described = [(d, describe_doc(d)) for d in sorted(docs, key=lambda d: (d["title"], d["product_key"]))]
+    described = [(d, describe_doc(d)) for d in sorted(docs, key=lambda d: (d["title"], d["product_key"]))
+                 if _product(d) == sells]
     dedicated = [d for d, link in described if link["kind"] == "dedicated" and d is not entry_doc
                  and covers(link, cars, catalog, strict=same_brand)]
     target = _pick(dedicated, titles)
@@ -168,7 +180,13 @@ def card_after_recommendation(context, docs, describe_doc):
     said = LINK_SENTENCE.match((before[-1].get("content") or "").strip())
     if not said:
         return None
-    described = [(d, describe_doc(d)) for d in sorted(docs, key=lambda d: (d["title"], d["product_key"]))]
+    latest = _entry([g for g in context.get("goods") or () if isinstance(g, dict)])
+    entry_doc = next((d for d in docs if latest and d["product_key"] == latest.get("product_key")), None)
+    sells = _product(entry_doc) if entry_doc else None
+    if sells is None:
+        return None
+    described = [(d, describe_doc(d)) for d in sorted(docs, key=lambda d: (d["title"], d["product_key"]))
+                 if _product(d) == sells]
     target = said.group(2)
     wanted = {d["title"] for d, link in described
               if (link["kind"] == "dedicated" and link["label"] == target if target else link["kind"] == "main")}
