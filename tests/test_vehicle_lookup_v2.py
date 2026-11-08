@@ -75,6 +75,8 @@ class FictionalTable(unittest.TestCase):
         for before in ("完全没有的车", "我已经找遍了，没有找到小床的"):
             with self.subTest(before=before):
                 self.assertEqual(self.talk(("buyer", before), ("buyer", "小窗的"))["status"], "no_vehicle")
+        # Also when a year answer came between the unknown car and the window.
+        self.assertEqual(self.talk(("buyer", "完全没有的车"), ("buyer", "25款"), ("buyer", "后窗"))["status"], "no_vehicle")
         # A new question is not a follow-up: it never inherits the earlier car.
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "发货几天"))["status"], "no_vehicle")
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "在吗"))["status"], "no_vehicle")
@@ -88,6 +90,8 @@ class FictionalTable(unittest.TestCase):
                 self.assertEqual((result["status"], result["forced"]), ("no_vehicle", None))
         # A complaint about received goods with a typo ("小床") is no car the table lacks.
         self.assertEqual(self.talk(("buyer", "你核实一下，我已经找遍了，没有找到小床的"))["status"], "no_vehicle")
+        # Asking whether a car fits is a lookup, even with a complaint word in it.
+        self.assertEqual(self.talk(("buyer", "请核实一下完全没有的车能用吗"))["status"], "not_found")
         # A car named together with the order talk is still looked up.
         self.assertEqual(self.talk(("buyer", "下单了，车型：示例车A 22款"))["status"], "matched")
         self.assertEqual(self.talk(("buyer", "已经下单了，完全没有的车"))["status"], "not_found")

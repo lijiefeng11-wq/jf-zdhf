@@ -756,6 +756,7 @@ WINDOW = re.compile(r"前挡风|后挡风|前挡|后挡|前档|后档|前窗|后
 NEGATION = re.compile(r"不是|并非|不要这个|没有这个|不对")
 # A buyer reporting a problem with received goods, not naming a car to look up.
 COMPLAINT = re.compile(r"找遍|找不到|没找到|没有找到|少了|少一|缺了|缺一|丢了|弄丢|坏了|破了|裂了|核实|投诉|退款|退货|换货")
+FIT_ASK = re.compile(r"能用|可以用|能装|可以装|适用|适合|合适|能做|可以做|有没有|有吗|有货")
 NO_VEHICLE_HINT = ("最新买家消息没有说出车名：买家在问能不能用、前面也没报过车型，才请他发具体车型和年款；"
                    "下单、发货、备注等其他问题按店铺规则回答。不要说查不到车型")
 ORDER_CLOSED = re.compile(r"取消|关闭|退款成功|已退款|待支付|待付款")
@@ -829,8 +830,9 @@ def _turn(catalog, texts):
             answers = [a for a in answers if not _query_year(a)] + dated[-1:]
         added = " ".join(answers)
         result = catalog.search((text + " " + added).strip())
-        if result["status"] == "not_found" and extras and all(_window_only(e) for e in extras):
-            # "小窗的" after a complaint is no car; a window only completes a car the table has.
+        if result["status"] == "not_found" and extras and _window_only(extras[-1]):
+            # "小窗的" after a complaint or an unknown car (even after a year answer) is no car: a window only
+            # completes a car the table has.
             break
         if result["status"] not in ("not_found", "needs_human") and not _named(catalog, text):
             return catalog.search(""), False  # Rows found only through a stray digit or character.
@@ -876,8 +878,10 @@ def conversation(catalog, messages, orders=()):
         result = {**result, "status": "needs_model",
                   "hint": "买家的话里否认了某款车，表内找到的可能正是被否认的车：请买家直接说出自己的车型和年款"}
     if result["status"] == "not_found" and (
-            (not followed and _no_car_words(texts[-1])) or COMPLAINT.search(_normalize(texts[-1]))):
-        # A complaint ("找遍了没有找到小床的") is never answered with the no-size sentence.
+            (not followed and _no_car_words(texts[-1]))
+            or (COMPLAINT.search(_normalize(texts[-1])) and not FIT_ASK.search(_normalize(texts[-1])))):
+        # A complaint ("找遍了没有找到小床的") is never answered with the no-size sentence; a car the buyer asks
+        # about ("请核实一下…能用吗") still is.
         result = {**result, "status": "no_vehicle", "hint": NO_VEHICLE_HINT}
     status = result["status"]
     forced = None
