@@ -752,6 +752,10 @@ GREETING = re.compile(r"在吗|在么|在嘛|在不在|在的|人呢|有人吗|�
 SHOP_TALK = re.compile(r"已经|下单|拍下|拍好|拍了|付款|付了|买好|买了|尽快|赶紧|快点|快些|加急|发货|发出|发走|到货|"
                        r"几天|多久|快递|物流|备注|备份|记录|记下|记一下|帮我|给我|发我|发给我|发一下|发过来|链接|还要|需要|要不要|怎么|今天|明天|"
                        r"能不能|一下|没|了|已|能|不|要|下|你")
+# Questions about the goods themselves ("这个透光吗", "什么材质", "怎么固定"): never part of a car name either.
+PRODUCT_TALK = re.compile(r"(?:双面黑|银黑|黑银|钛银|黑色|银色)(?:和|跟|与)?|透不透光|不透光|透光|遮光|透不透|不透|透明|材质|材料|面料|功能|作用|固定|打孔|安装|装上|吸盘|卡扣|钢丝|铁圈|弹性|"
+                          r"厚度|多厚|厚不厚|收纳|折叠|颜色|区别|质量|隔热|防晒|效果|视频|价格|多少钱|什么|啥|怎么样|怎么|"
+                          r"这个|那个|这款|有用|遮阳挡|遮阳帘|遮阳板|厚|薄")
 WINDOW = re.compile(r"前挡风|后挡风|前挡|后挡|前档|后档|前窗|后窗|中窗|侧窗|小窗|三角窗|侧三|尾挡|全车|一套|一片")
 NEGATION = re.compile(r"不是|并非|不要这个|没有这个|不对")
 # A buyer reporting a problem with received goods, not naming a car to look up.
@@ -807,8 +811,9 @@ def _named(catalog, text):
 
 
 def _no_car_words(text):
-    """Nothing but greetings, order talk, punctuation and words that are never part of a car name ("后窗", "在吗", "下单了")."""
-    rest = FILLER.sub(" ", SHOP_TALK.sub(" ", GREETING.sub(" ", _normalize(text))))
+    """Nothing but greetings, order or goods talk, punctuation and words that are never part of a car name ("后窗",
+    "在吗", "下单了", "这个透光吗")."""
+    rest = FILLER.sub(" ", SHOP_TALK.sub(" ", PRODUCT_TALK.sub(" ", GREETING.sub(" ", _normalize(text)))))
     return not re.sub(r"[\s，。？！,.?!~～、…：:;；]", "", FOLLOW_UP_FILLER.sub("", rest))
 
 
