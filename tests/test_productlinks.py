@@ -110,6 +110,9 @@ class Links(unittest.TestCase):
         ctx["goods"].insert(0, {"goods_ref": "g0", "title": "汽车脚垫", "product_key": OTHER["product_key"],
                                 "evidence": [{"source": "order", "order_ref": "o", "observed_at": 99}]})
         self.assertEqual(self.recommend(ctx)["target"], "丰田凯美瑞/卡罗拉/雷凌")
+        # A newer card without a learned product: the older entry card no longer decides.
+        ctx["goods"].insert(0, {"goods_ref": "g9", "title": "别的商品", "evidence": [{"source": "goods_card", "message_id": "m9", "observed_at": 50}]})
+        self.assertIsNone(self.recommend(ctx))
 
 
 class CrossBrand(unittest.TestCase):

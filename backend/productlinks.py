@@ -131,8 +131,9 @@ def recommend(context, vehicle, docs, describe_doc, catalog):
         return None
     if any(isinstance(o, dict) and OPEN_ORDER.search(str(o.get("status") or "")) for o in context.get("orders") or ()):
         return None
-    latest = _entry([g for g in context.get("goods") or () if isinstance(g, dict) and g.get("product_key")])
-    if not latest:
+    # The newest card decides, even one no learned product can be matched to: then nothing is recommended.
+    latest = _entry([g for g in context.get("goods") or () if isinstance(g, dict)])
+    if not latest or not latest.get("product_key"):
         return None
     by_key = {d["product_key"]: d for d in docs}
     entry_doc = by_key.get(latest["product_key"])
