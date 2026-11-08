@@ -68,9 +68,29 @@ class FictionalTable(unittest.TestCase):
         self.assertEqual(result["status"], "matched")
         result = self.talk(("buyer", "示例旅行车"), ("agent", "5座还是7座？"), ("buyer", "7座"))
         self.assertEqual(result["status"], "matched")
+        # A window alone asks about the car just named.
+        result = self.talk(("buyer", "示例车A 22款"), ("buyer", "后窗"))
+        self.assertEqual((result["status"], result["follow_up"]), ("matched", True))
+        # It completes only a car the table has: after a complaint or an unknown car it names no car.
+        for before in ("完全没有的车", "我已经找遍了，没有找到小床的"):
+            with self.subTest(before=before):
+                self.assertEqual(self.talk(("buyer", before), ("buyer", "小窗的"))["status"], "no_vehicle")
         # A new question is not a follow-up: it never inherits the earlier car.
-        self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "发货几天"))["status"], "not_found")
+        self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "发货几天"))["status"], "no_vehicle")
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "在吗"))["status"], "no_vehicle")
+
+    def test_order_talk_after_an_unknown_car_names_no_car(self):
+        # The table lacks the earlier car; "下单了" must never be answered with the no-size sentence.
+        for text in ("下单了", "尽快发货", "快点", "还要备注吗？", "你给我备注一下", "你帮我备注一下，我下单了",
+                     "我拍了给我备份车型年份", "怎么没发货呢", "已经下单了麻烦尽快发货", "今天能发货不"):
+            with self.subTest(text=text):
+                result = self.talk(("buyer", "完全没有的车 2025"), ("agent", "x"), ("buyer", text), orders=[{"status": "待发货"}])
+                self.assertEqual((result["status"], result["forced"]), ("no_vehicle", None))
+        # A complaint about received goods with a typo ("小床") is no car the table lacks.
+        self.assertEqual(self.talk(("buyer", "你核实一下，我已经找遍了，没有找到小床的"))["status"], "no_vehicle")
+        # A car named together with the order talk is still looked up.
+        self.assertEqual(self.talk(("buyer", "下单了，车型：示例车A 22款"))["status"], "matched")
+        self.assertEqual(self.talk(("buyer", "已经下单了，完全没有的车"))["status"], "not_found")
 
     def test_program_stops(self):
         self.assertEqual(self.talk(("buyer", "吉姆尼5门"))["forced"], "needs_human")

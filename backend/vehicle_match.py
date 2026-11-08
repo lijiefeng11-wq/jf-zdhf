@@ -747,9 +747,17 @@ AFFIRM = re.compile(r"(?:是|是的|对|对的|嗯|嗯嗯|没错|就是|就是�
 FOLLOW_UP_FILLER = re.compile(r"我的是|我的|我家的|就是|请问|您好|你好|谢谢|好的|在吗|在么|能用吗|能装吗|可以吗|可以用吗|"
                               r"年份|年款|款式|的|是|呢|吗|款|年|版|车|哦|啊|呀|哈|嗯|对|亲|那|三厢|两厢")
 GREETING = re.compile(r"在吗|在么|在嘛|在不在|在的|人呢|有人吗|老板|客服|你好|您好|哈喽|hello|hi|嗯|哦|好的|谢谢|麻烦|请问")
+# Order, shipping and remark talk ("下单了", "尽快发货", "快点", "还要备注吗"): never part of a car name, so a
+# message made only of it does not name a car, even after an earlier car the table lacks.
+SHOP_TALK = re.compile(r"已经|下单|拍下|拍好|拍了|付款|付了|买好|买了|尽快|赶紧|快点|快些|加急|发货|发出|发走|到货|"
+                       r"几天|多久|快递|物流|备注|备份|记录|记下|记一下|帮我|给我|还要|需要|要不要|怎么|今天|明天|"
+                       r"能不能|一下|没|了|已|能|不|要|下|你")
+WINDOW = re.compile(r"前挡风|后挡风|前挡|后挡|前档|后档|前窗|后窗|中窗|侧窗|小窗|三角窗|侧三|尾挡|全车|一套|一片")
 NEGATION = re.compile(r"不是|并非|不要这个|没有这个|不对")
-NO_VEHICLE_HINT = ("最新买家消息没有说出车名：买家在问能不能用就请他发具体车型和年款；"
-                   "其他问题按店铺规则回答。不要说查不到车型")
+# A buyer reporting a problem with received goods, not naming a car to look up.
+COMPLAINT = re.compile(r"找遍|找不到|没找到|没有找到|少了|少一|缺了|缺一|丢了|弄丢|坏了|破了|裂了|核实|投诉|退款|退货|换货")
+NO_VEHICLE_HINT = ("最新买家消息没有说出车名：买家在问能不能用、前面也没报过车型，才请他发具体车型和年款；"
+                   "下单、发货、备注等其他问题按店铺规则回答。不要说查不到车型")
 ORDER_CLOSED = re.compile(r"取消|关闭|退款成功|已退款|待支付|待付款")
 
 
@@ -763,19 +771,23 @@ def _buyer_turns(messages):
 
 
 def _follow_up(text):
-    """A short answer that only adds a year, seats, a generation or a yes to the car named before."""
+    """A short answer that only adds a year, seats, a generation, a window or a yes to the car named before."""
     rest = _normalize(text)
     if len(rest) > 32:
         return False
     if AFFIRM.fullmatch(re.sub(r"[\s，。？！,.?!~～]", "", rest)):
         return True
     payload = False  # A greeting or "？" alone answers nothing about the car.
-    # A bare "18" after "哪一年的？" is a year too.
+    # A bare "18" after "哪一年的？" is a year too; "后窗" after "24款启源A07" asks about that car.
     for pattern in (YEAR_RANGE, SINGLE_YEAR, GLUED_YEAR, GENERATION, SEAT_OF, DISPLACEMENT,
-                    re.compile(r"(?<![a-z0-9])\d{2}(?![a-z0-9])")):
+                    re.compile(r"(?<![a-z0-9])\d{2}(?![a-z0-9])"), WINDOW):
         payload = payload or bool(pattern.search(rest))
         rest = pattern.sub(" ", rest)
     return payload and not re.sub(r"[\s，。？！,.?!~～]", "", FOLLOW_UP_FILLER.sub("", rest))
+
+
+def _window_only(text):
+    return not re.sub(r"[\s，。？！,.?!~～]", "", FOLLOW_UP_FILLER.sub("", WINDOW.sub(" ", _normalize(text))))
 
 
 def _named(catalog, text):
@@ -794,8 +806,8 @@ def _named(catalog, text):
 
 
 def _no_car_words(text):
-    """Nothing but greetings, punctuation and words that are never part of a car name ("后窗", "在吗", "？")."""
-    rest = FILLER.sub(" ", GREETING.sub(" ", _normalize(text)))
+    """Nothing but greetings, order talk, punctuation and words that are never part of a car name ("后窗", "在吗", "下单了")."""
+    rest = FILLER.sub(" ", SHOP_TALK.sub(" ", GREETING.sub(" ", _normalize(text))))
     return not re.sub(r"[\s，。？！,.?!~～、…：:;；]", "", FOLLOW_UP_FILLER.sub("", rest))
 
 
@@ -817,6 +829,9 @@ def _turn(catalog, texts):
             answers = [a for a in answers if not _query_year(a)] + dated[-1:]
         added = " ".join(answers)
         result = catalog.search((text + " " + added).strip())
+        if result["status"] == "not_found" and extras and all(_window_only(e) for e in extras):
+            # "小窗的" after a complaint is no car; a window only completes a car the table has.
+            break
         if result["status"] not in ("not_found", "needs_human") and not _named(catalog, text):
             return catalog.search(""), False  # Rows found only through a stray digit or character.
         similar = (result.get("understood") or {}).get("similar")
@@ -860,7 +875,9 @@ def conversation(catalog, messages, orders=()):
         # "不是星河远航，是…": the name found may be the car the buyer denies; ask instead of approving it.
         result = {**result, "status": "needs_model",
                   "hint": "买家的话里否认了某款车，表内找到的可能正是被否认的车：请买家直接说出自己的车型和年款"}
-    if result["status"] == "not_found" and not followed and _no_car_words(texts[-1]):
+    if result["status"] == "not_found" and (
+            (not followed and _no_car_words(texts[-1])) or COMPLAINT.search(_normalize(texts[-1]))):
+        # A complaint ("找遍了没有找到小床的") is never answered with the no-size sentence.
         result = {**result, "status": "no_vehicle", "hint": NO_VEHICLE_HINT}
     status = result["status"]
     forced = None
