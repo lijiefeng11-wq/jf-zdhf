@@ -1,10 +1,14 @@
 """Negotiated deadlines use fictional HTTP providers and reaped child processes."""
+import json
 import multiprocessing
+from pathlib import Path
+import tempfile
 import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
 
+from backend import diagnostics
 from backend.engine import ProviderFailure, model_decide
 from backend.modelworker import bounded_decide
 from synthetic_provider import SyntheticProvider, completion, http_error, timeout
@@ -109,8 +113,8 @@ class DeadlineModelTests(unittest.TestCase):
 
     def test_child_exit_between_poll_and_alive_still_consumes_result(self):
         receiver, sender, child = Mock(), Mock(), Mock()
-        receiver.poll.side_effect = [False, True, True]
-        receiver.recv.return_value = ({"action": "reply", "text": "Synthetic", "reason": "model:primary:ok"}, {"model_slot": "primary"})
+        receiver.poll.side_effect = [False, True, True, False]
+        receiver.recv.return_value = ("result", {"action": "reply", "text": "Synthetic", "reason": "model:primary:ok"}, {"model_slot": "primary"})
         child.is_alive.return_value = False
         context = Mock()
         context.Pipe.return_value = (receiver, sender)
@@ -122,6 +126,36 @@ class DeadlineModelTests(unittest.TestCase):
         self.assertEqual(work["timing"], {"model_slot": "primary"})
         child.join.assert_called_once()
         child.close.assert_called_once()
+
+    def logged(self, work, config):
+        with tempfile.TemporaryDirectory() as directory:
+            log = diagnostics.Diagnostics(directory)
+            with diagnostics.scope(log, event_ref="synthetic-ref"):
+                result = bounded_decide(work, config, lambda: True, threading.Event())
+            log.close()
+            raw = (Path(directory) / "logs/backend.jsonl").read_text(encoding="utf-8")
+        return result, [json.loads(line) for line in raw.splitlines()]
+
+    def test_child_process_model_calls_reach_the_parent_log(self):
+        # The live service decides in a spawned child; its slot records must still be written.
+        self.primary.queue(http_error(503))
+        config = model_config(self.primary, self.backup)
+        config["backup"]["model"] = "synthetic-backup"
+        result, records = self.logged(job(), config)
+        self.assertEqual(result["action"], "reply")
+        self.assertEqual([(r["event"], r["slot"], r["model"]) for r in records],
+                         [("model_attempt", "primary", "synthetic"), ("model_failed", "primary", "synthetic"),
+                          ("model_attempt", "backup", "synthetic-backup"), ("model_succeeded", "backup", "synthetic-backup")])
+        self.assertTrue(all(r["event_ref"] == "synthetic-ref" for r in records))
+        self.assertEqual(records[1]["code"], "http_503")
+        self.assertTrue(records[-1]["fallback"])
+        self.assertFalse(multiprocessing.active_children())
+
+    def test_attempt_cut_off_by_the_deadline_is_still_logged(self):
+        self.primary.queue(timeout(delay=5))
+        result, records = self.logged(job(.6), model_config(self.primary))
+        self.assertEqual(result["reason"], "reply_deadline_exceeded")
+        self.assertEqual([(r["event"], r["slot"]) for r in records], [("model_attempt", "primary")])
 
     def test_invalid_model_output_has_fixed_failure_class(self):
         self.primary.queue(completion("fictional private invalid output"))
