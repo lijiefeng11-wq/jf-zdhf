@@ -103,6 +103,9 @@ class Links(unittest.TestCase):
         # Not a sunshade, a car already named, or an order already placed: no fixed sentence.
         self.assertIsNone(sent(OTHER))
         self.assertIsNone(sent(WENJIE, before=[("buyer", "26款问界M7")]))
+        for later in ("透光吗", "谢谢"):
+            with self.subTest(later=later):
+                self.assertIsNone(sent(MAIN, before=[("buyer", "26款问界M7"), ("buyer", later)]))
         self.assertIsNone(sent(MAIN, orders=[{"status": "待发货"}]))
         # Only the card the buyer sent last: a text after it is answered as usual.
         ctx = context("透光吗")
