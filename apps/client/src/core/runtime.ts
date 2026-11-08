@@ -609,9 +609,12 @@ export class ShopRuntime {
     const id = stable ? (m.platform_message_id as string) : `local-${randomUUID()}`;
     const stored: StoredMessage = { id, stable, role: m.role, kind: m.kind, content: m.content, created_at: m.created_at, ...(m.card ? { card: m.card } : {}), ...(m.image_ref ? { image_ref: m.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, live, session_id: this.sessionId };
     this.replyTiming.observe(stored, true);
+    const known = this.journal.conversation(m.conversation_id).messages.findLast((x) => x.card?.product_key)?.card?.product_key;
     this.journal.addMessage(m.conversation_id, stored);
-    // 平台自动卡片不使已提交的判断失效：买家的问题不变，下一轮提交时照常带上它。
-    if (!platformCard(stored)) this.journal.bumpRevision(m.conversation_id, live ? `message:${m.role}` : "history_sync");
+    // 平台自动卡片不使已提交的判断失效：买家的问题不变，下一轮提交时照常带上它；
+    // 但卡片带来不同的商品时，商品上下文已变，旧判断仍须失效。
+    const sameProduct = !stored.card?.product_key || stored.card.product_key === known;
+    if (!(platformCard(stored) && sameProduct)) this.journal.bumpRevision(m.conversation_id, live ? `message:${m.role}` : "history_sync");
     if (!stable) return this.journal.note(m.conversation_id, id, "no_stable_id");
     if (!live) return this.journal.note(m.conversation_id, id, "history_sync");
     if (m.role !== "buyer") return;

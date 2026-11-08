@@ -88,7 +88,7 @@ class FictionalTable(unittest.TestCase):
                      "银黑的好还是双面黑好", "尺寸准吗", "需要自己量尺寸吗", "会不会掉下来", "有异味吗", "防水吗", "送吸盘吗",
                      "能降温多少度", "冬天能用吗", "会褪色吗", "一套有几片", "包含哪些窗", "晚上开灯外面能看到里面吗", "保修多久", "有发票吗",
                      "这个可以使用吗", "能使用吗", "可不可以用", "有车帘吗",
-                     "怎么折", "收纳袋多大", "要提供尺寸吗", "收到尺寸不对装不上", "可以开发票吗"):
+                     "怎么折", "怎么折叠", "可以折叠吗", "折叠收纳", "收纳袋多大", "要提供尺寸吗", "收到尺寸不对装不上", "可以开发票吗"):
             with self.subTest(text=text):
                 self.assertEqual(self.talk(("buyer", text))["status"], "no_vehicle")
         # A car named with the question is still looked up, known or not.

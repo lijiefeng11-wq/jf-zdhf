@@ -224,6 +224,17 @@ describe("去重与重投", () => {
     assert.equal(rt.sendBlocker(eventsOf(rt)[0]), "superseded");
   });
 
+  test("提交后才到、带来另一商品的来源卡片仍使判断失效", async () => {
+    const { rt, mock } = await shop({ mode: "observe" });
+    const a = mock.injectBuyerMessage({ conversation_id: "buyer-1", content: "营业时间？" });
+    await decided(rt);
+    const title = "平台来源卡片：买家从商品进入";
+    (mock as any).emit({ type: "message", live: true, message: { conversation_id: "buyer-1", platform_message_id: "mock-src-3", role: "system", kind: "card", content: title, created_at: a.created_at + 1, card: { type: "source", title, product_key: "goods-9" } } });
+    await waitFor(() => rt.journal.conversation("buyer-1").messages.length === 2, "card stored");
+    rt.setMode("auto");
+    assert.equal(rt.sendBlocker(eventsOf(rt)[0]), "superseded");
+  });
+
   test("平台来源卡片与历史中的买家卡片都不在本地阻止", async () => {
     const { rt, mock } = await shop();
     (mock as any).history.set("buyer-1", [{ conversation_id: "buyer-1", platform_message_id: "mock-src-1", role: "system", kind: "card", content: "平台来源卡片：买家从商品进入", created_at: Math.floor(Date.now() / 1000) - 5 }]);
