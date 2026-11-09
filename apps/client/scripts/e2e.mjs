@@ -82,7 +82,7 @@ try {
   }
   if (!page) throw new Error("未找到客户端主界面");
   page.setDefaultTimeout(15_000);
-  // Electron 启动时 showInactive；鼠标操作前先把本次隔离测试窗口放到前台。
+  // 鼠标操作前先把本次隔离测试窗口放到前台。
   await page.bringToFront();
   const detail = page.locator("#detail");
   const card = (title) => detail.locator(".card", { has: page.locator("h3", { hasText: title }) }).locator(".value");
