@@ -135,12 +135,14 @@ describe("拼多多响应解析", () => {
         { id: "3000000000001", from: "user", ts: NOW - 2, type: 48, template_name: "order_remarks_apply_card", content: "[请确认消费者订单备注]", info, biz_context: { orderSn: "000000-000000000000001", remarks: " 23年 虚构车型 " } },
         { id: "3000000000002", from: "user", ts: NOW - 1, type: 48, template_name: "order_remarks_apply_card", content: "[请确认消费者订单备注]", info, biz_context: { remarks: "https://example.invalid/x" } },
         { id: "3000000000003", from: "user", ts: NOW, type: 48, template_name: "other_card", content: "[其他]", info },
+        { id: "3000000000004", from: "user", ts: NOW, type: 48, template_name: "order_remarks_apply_card", content: "[请确认消费者订单备注]", info, biz_context: { remarks: "虚构车型 电话13800000000 地址：虚构市虚构路1号" } },
       ]),
     );
     assert.deepEqual(parsed?.messages.map((m) => [m.role, m.kind, m.content, m.card]), [
       ["buyer", "card", "请确认消费者订单备注：备注内容 23年 虚构车型", { type: "order", title: "请确认消费者订单备注", fields: [{ label: "备注内容", value: "23年 虚构车型" }] }],
       ["buyer", "card", "请确认消费者订单备注：备注内容 （未读到）", { type: "order", title: "请确认消费者订单备注" }],
       ["buyer", "unsupported", "非文字消息（类型 48）", undefined],
+      ["buyer", "card", "请确认消费者订单备注：备注内容 虚构车型 电话[已隐去] 地址：[已隐去]", { type: "order", title: "请确认消费者订单备注", fields: [{ label: "备注内容", value: "虚构车型 电话[已隐去] 地址：[已隐去]" }] }],
     ]);
   });
 

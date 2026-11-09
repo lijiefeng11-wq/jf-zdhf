@@ -1,6 +1,7 @@
 import type { PlatformMessage } from "./adapter.js";
 import type { Card, Kind, Role } from "./protocol.js";
 import { isIdentifier } from "./protocol.js";
+import { redactText } from "./pddOrders.js";
 import { productKey } from "./productLearning.js";
 
 // 拼多多商家后台客服页面响应解析。字段依据：用户测试店铺登录后，
@@ -86,7 +87,9 @@ export const REMARK_CARD_TITLE = "请确认消费者订单备注";
  */
 export function remarkCard(m: Record<string, unknown>): Card | null {
   if (m.type !== 48 || m.template_name !== "order_remarks_apply_card") return null;
-  const remarks = cardText(obj(m.biz_context)?.remarks, 200);
+  const raw = obj(m.biz_context)?.remarks;
+  // 买家可能在备注里写手机号、地址：与订单备注一样先隐去再提交。
+  const remarks = cardText(typeof raw === "string" ? redactText(raw) : undefined, 200);
   return { type: "order", title: REMARK_CARD_TITLE, ...(remarks ? { fields: [{ label: "备注内容", value: remarks }] } : {}) };
 }
 
