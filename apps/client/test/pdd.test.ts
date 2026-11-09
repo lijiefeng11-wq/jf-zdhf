@@ -146,6 +146,81 @@ describe("拼多多响应解析", () => {
     ]);
   });
 
+  test("对话：常见问题点选、店铺自动答复、商家通知（type 0 模板）按文字；常见问题菜单（type 56）按客服文字；视频（type 14）仍不可识别", () => {
+    const parsed = parseChatList(
+      listRequest(),
+      listResponse([
+        { id: "3000000000001", from: "mall_cs", ts: NOW - 5, type: 56, template_name: "rich_text_faq_list", content: "[常见问题列表]", info: { template: "text_with_menu_items", content: [
+          { type: "text", text: "请发虚构车型与年份" },
+          { type: "menu_item", text: "虚构问题甲", click_action: { name: "send_cmd_hide" } },
+          { type: "menu_item", text: "https://example.invalid/x" },
+          { type: "menu_item", text: "虚构问题乙" },
+        ] } },
+        { id: "3000000000002", from: "user", ts: NOW - 4, template_name: "mall_faq_question", content: "虚构问题甲" },
+        { id: "3000000000003", from: "mall_cs", ts: NOW - 3, template_name: "mall_answer_with_text", content: "虚构自动答复" },
+        { id: "3000000000004", from: "mall_cs", ts: NOW - 2, template_name: "merchant_note", content: "虚构退货说明" },
+        { id: "3000000000005", from: "user", ts: NOW - 1, template_name: "mall_faq_question", content: "https://example.invalid/y" },
+        { id: "3000000000006", from: "user", ts: NOW, type: 14, template_name: "library_video", content: "[视频]", info: { file_id: "1" } },
+        { id: "3000000000007", from: "mall_cs", ts: NOW, type: 56, template_name: "rich_text_faq_list", content: "[常见问题列表]", info: { content: [] } },
+      ]),
+    );
+    assert.deepEqual(parsed?.messages.map((m) => [m.role, m.kind, m.content, m.card]), [
+      ["agent", "text", "[常见问题列表] 请发虚构车型与年份 可点问题：虚构问题甲 / 虚构问题乙", undefined],
+      ["buyer", "text", "虚构问题甲", undefined],
+      ["agent", "text", "虚构自动答复", undefined],
+      ["agent", "text", "虚构退货说明", undefined],
+      ["buyer", "unsupported", "链接/图片（类型 0）", undefined],
+      ["buyer", "unsupported", "[视频]", undefined],
+      ["agent", "unsupported", "非文字消息（类型 56）", undefined],
+    ]);
+  });
+
+  test("对话：售后申请卡片（type 64）按买家订单卡片提交，联系方式不收、说明隐去手机号", () => {
+    const parsed = parseChatList(
+      listRequest(),
+      listResponse([
+        { id: "3000000000001", from: "user", ts: NOW, type: 64, template_name: "apply_for_consultation_card_new", content: "虚构售后提示", info: { key: "apply-for-consultation", data: {
+          title: "消费者申请售后，建议先协商",
+          apply_info: [
+            { label: "申请类型", type: "text", value: "退货退款" },
+            { label: "申请原因", type: "text", value: "虚构原因" },
+            { label: "退款金额", type: "text", value: "¥1.00" },
+            { label: "申请说明", type: "text", value: "不合适 电话13800000000" },
+            { label: "上传凭证", type: "media" },
+            { label: "联系方式", type: "text", value: "13800000000" },
+          ],
+          goods_info: { goods_name: "虚构遮阳挡", goods_thumb_url: "https://example.invalid/t.jpg" },
+          click_action: { params: { jump_url: "https://example.invalid/after" } },
+        } } },
+        { id: "3000000000002", from: "user", ts: NOW, type: 64, template_name: "apply_for_consultation_card_new", content: "https://example.invalid/z" },
+      ]),
+    );
+    const fields = [{ label: "申请类型", value: "退货退款" }, { label: "申请原因", value: "虚构原因" }, { label: "退款金额", value: "¥1.00" }, { label: "申请说明", value: "不合适 电话[已隐去]" }, { label: "商品", value: "虚构遮阳挡" }];
+    assert.deepEqual(parsed?.messages.map((m) => [m.role, m.kind, m.content, m.card]), [
+      ["buyer", "card", "消费者申请售后：申请类型 退货退款；申请原因 虚构原因；退款金额 ¥1.00；申请说明 不合适 电话[已隐去]；商品 虚构遮阳挡", { type: "order", title: "消费者申请售后", description: "消费者申请售后，建议先协商", fields }],
+      ["buyer", "card", "消费者申请售后", { type: "order", title: "消费者申请售后" }],
+    ]);
+    assert.ok(!JSON.stringify(parsed).includes("13800000000"));
+  });
+
+  test("对话：平台售后/纠纷预警（type 8）、系统消息（type 24）、相似商品（type 51）按 system/card 提交", () => {
+    const parsed = parseChatList(
+      listRequest(),
+      listResponse([
+        { id: "3000000000001", from: "user", ts: NOW - 3, type: 8, template_name: "dispute_warning", content: "[虚构预警]", info: { title: "虚构纠纷预警", goods_info: { goods_name: "虚构商品" }, text_list: [[{ text: "虚构说明一" }, { text: "https://example.invalid/a" }], [{ text: "虚构说明二" }]] } },
+        { id: "3000000000002", from: "user", ts: NOW - 2, type: 8, template_name: "aftersales_hosting_warning_card", content: "虚构售后提醒" },
+        { id: "3000000000003", from: "user", ts: NOW - 1, type: 24, content: "虚构撤回提示" },
+        { id: "3000000000004", from: "mall_cs", ts: NOW, type: 51, content: "https://example.invalid/similar" },
+      ]),
+    );
+    assert.deepEqual(parsed?.messages.map((m) => [m.role, m.kind, m.content, m.card]), [
+      ["system", "card", "虚构纠纷预警", { type: "system", title: "虚构纠纷预警", description: "虚构说明一 虚构说明二" }],
+      ["system", "card", "虚构售后提醒", { type: "system", title: "虚构售后提醒" }],
+      ["system", "card", "虚构撤回提示", { type: "system", title: "虚构撤回提示" }],
+      ["system", "card", "平台相似商品推荐卡片", { type: "system", title: "平台相似商品推荐卡片" }],
+    ]);
+  });
+
   test("对话：图片消息（type=1）为 image，只取 https 图片地址", () => {
     const parsed = parseChatList(
       listRequest(),

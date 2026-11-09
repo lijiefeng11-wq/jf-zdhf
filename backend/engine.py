@@ -24,6 +24,8 @@ MAX_COMPLETION_TOKENS = 1024
 # card's confirm/reject buttons rewrite the order and are never pressed.
 REMARK_CARD_TITLE = "请确认消费者订单备注"
 REMARK_CARD_REPLY = "嗯嗯 已记录"
+# The platform's after-sales request card (refund/return the buyer filed): a human handles after-sales.
+AFTER_SALE_CARD_TITLE = "消费者申请售后"
 
 
 def decision(action, reason, text=""):
@@ -93,6 +95,8 @@ def immediate_decision(job):
     if (latest["kind"] == "card" and card.get("type") == "order" and card.get("title") == REMARK_CARD_TITLE
             and any(f.get("label") == "备注内容" and f.get("value", "").strip() for f in card.get("fields") or ())):
         return decision("reply", "order_remark_card", REMARK_CARD_REPLY)
+    if latest["kind"] == "card" and card.get("type") == "order" and card.get("title") == AFTER_SALE_CARD_TITLE:
+        return decision("handoff", "after_sale_request")
     if settings["mode"] == "rules":
         if latest["kind"] == "text" and not latest.get("attachments"):
             for rule in settings["rules"]:

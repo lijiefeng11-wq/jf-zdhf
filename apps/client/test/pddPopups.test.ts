@@ -8,7 +8,7 @@ const req = Module.createRequire(__filename);
 const electronPath = req.resolve("electron");
 req.cache[electronPath] = { id: electronPath, filename: electronPath, loaded: true, exports: { BrowserWindow: class {}, session: { fromPartition: () => ({}) } } } as unknown as NodeModule;
 const { PddPageAdapter, POPUP_SWEEP_START_MS, POPUP_SWEEP_STUCK_MS } = req("../src/main/pddAdapter.js") as typeof import("../src/main/pddAdapter.js");
-const { popupSweepScript, AUTO_DISMISS_LABELS, MANUAL_DISMISS_LABELS } = req("../src/main/pddPopups.js") as typeof import("../src/main/pddPopups.js");
+const { popupSweepScript, AUTO_DISMISS_LABELS, MANUAL_DISMISS_LABELS, POPUP_GUIDE } = req("../src/main/pddPopups.js") as typeof import("../src/main/pddPopups.js");
 
 type Result = { dismissed: { label: string; layer: string }[]; seen: { layer: string; title: string | null; why: string }[]; expired?: boolean };
 
@@ -45,6 +45,13 @@ describe("平台引导弹窗清理", () => {
     assert.deepEqual(labels("auto"), [...AUTO_DISMISS_LABELS]);
     for (const label of MANUAL_DISMISS_LABELS) assert.ok(!labels("auto").includes(label), `自动清理不应点“${label}”`);
     assert.deepEqual(labels("manual"), [...AUTO_DISMISS_LABELS, ...MANUAL_DISMISS_LABELS]);
+  });
+
+  test("自动清理认得平台的纯图片引导（含挡住视频入口的“联系安装师傅”），不把商品说明书弹窗当引导", () => {
+    const guide = new RegExp(POPUP_GUIDE, "i");
+    assert.ok(popupSweepScript("auto", Date.now()).includes(JSON.stringify(POPUP_GUIDE)));
+    for (const cls of ["pickupServiceGuide", "installerContact"]) assert.ok(guide.test(cls), cls);
+    for (const cls of ["el-dialog goods-desc-modal-part-dialog", "fullscreen-dialog-manager", "reply-box", "video-list-box"]) assert.ok(!guide.test(cls), cls);
   });
 
   test("自动清理：发送、待确认发送、预热进行中或未登录时不执行", () => {

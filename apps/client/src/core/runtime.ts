@@ -210,6 +210,10 @@ export class ShopRuntime {
   private readonly sendOptions = new Map<string, { json: string; list: PlatformSendOption[] }>();
   /** 事件提交时的候选映射 option_id → 平台对象，只在内存；重启后该事件的 send_item 不执行。 */
   private readonly eventOptions = new Map<string, Map<string, PlatformSendOption>>();
+  /** 候选版本：每次某对话候选集合或映射变化时取新的全局序号；事件记下生成候选时的版本（契约“聊天页附加发送·绑定”）。 */
+  private optionsSeq = 0;
+  private readonly optionsAt = new Map<string, number>();
+  private readonly eventOptionsAt = new Map<string, number | undefined>();
   /** 事件提交时的 conv_state，只在内存；重启后该事件的 mark 不执行。 */
   private readonly eventConvState = new Map<string, ConvState>();
   private readonly declareMark: boolean;
@@ -551,15 +555,17 @@ export class ShopRuntime {
     if (orders.length && snap.items.size) request.context.orders = orders.map((o) => (snap.items.has(o.order_ref) ? { ...o, items: snap.items.get(o.order_ref) } : o));
   }
 
-  /** 候选集合或其私有映射变化使该对话的旧决定失效（契约“聊天页附加发送”）。 */
+  /**
+   * 候选集合或其私有映射变化只使该对话已生成的 send_item 决定失效（契约“聊天页附加发送·绑定”）：
+   * 记新的候选版本，不递增 context_revision，文字回复等其他决定照常有效。
+   */
   private setSendOptions(conversationId: string, options: PlatformSendOption[]) {
     if (!isIdentifier(conversationId) || this.platformCheck()) return;
     const json = JSON.stringify(options);
     if (this.sendOptions.get(conversationId)?.json === json) return;
     this.sendOptions.set(conversationId, { json, list: options });
     this.log(`send options conv=${this.refs.conv(conversationId)} count=${options.length}`);
-    // 未确认附加发送时候选不进入上下文，变化不影响旧决定。
-    if (this.sendItemConfirmed() && this.journal.conversations.get(conversationId)?.messages.length) this.journal.bumpRevision(conversationId, "send_options");
+    this.optionsAt.set(conversationId, ++this.optionsSeq);
   }
 
   /** 按契约字段白名单与上限生成本事件候选；option_id 绑定店铺、对话与版本，不含平台编号。 */
@@ -825,6 +831,7 @@ export class ShopRuntime {
     };
     // 契约“商品快照（1.2 草案）”：能力确认后才带 goods 与订单明细 items；来源只取本次提交的消息与订单。
     if (this.goodsSnapshotConfirmed()) this.attachGoods(conversationId, request);
+    const optionsAt = this.optionsAt.get(conversationId);
     const candidates = this.buildSendOptions(conversationId, conv.revision);
     if (candidates) request.context.send_options = candidates.options;
     // 契约“会话操作（1.3 草案）”：能力确认后必带 conv_state；读不到如实报 marked=null，不捏造 false、不丢弃事件。
@@ -868,7 +875,10 @@ export class ShopRuntime {
     // 准备期间进入了“更新中”：不再提交新事件。
     if (this.updateHold()) return this.journal.note(conversationId, messageId, UPDATE_HOLD_REASON);
     if (memoryOnly) this.fullBodies.set(request.event_id, body);
-    if (candidates) this.eventOptions.set(request.event_id, candidates.map);
+    if (candidates) {
+      this.eventOptions.set(request.event_id, candidates.map);
+      this.eventOptionsAt.set(request.event_id, optionsAt);
+    }
     if (request.context.conv_state) this.eventConvState.set(request.event_id, request.context.conv_state);
     this.journal.addEvent({
       event_id: request.event_id,
@@ -1130,6 +1140,7 @@ export class ShopRuntime {
     const option = this.eventOptions.get(ev.event_id)?.get(item.option_id);
     if (!option) return "option_unknown";
     if (option.type !== item.type) return "option_type_mismatch";
+    if (this.optionsAt.get(ev.conversation_id) !== this.eventOptionsAt.get(ev.event_id)) return "send_options_changed";
     const current = this.sendOptions.get(ev.conversation_id)?.list ?? [];
     if (!current.some((o) => o.type === option.type && o.key === option.key)) return "option_gone";
     return null;

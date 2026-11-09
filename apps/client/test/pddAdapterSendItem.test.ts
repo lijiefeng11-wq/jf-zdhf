@@ -557,3 +557,29 @@ describe("拼多多适配器：说明书部分收集与预热续读（Electron �
     assert.equal(stale(), 0);
   });
 });
+
+describe("拼多多适配器：预先展开视频弹窗加载视频库", () => {
+  test("没打开对话时入口不在：每次照常重试，同一结果只记一次日志；入口出现后展开成功不再重试", async () => {
+    const adapter = new PddPageAdapter("shop-x", "虚构店铺") as any;
+    let panel: unknown = "pdd_video_entry_missing";
+    let runs = 0;
+    adapter.window = { isDestroyed: () => false, webContents: { isDestroyed: () => false, executeJavaScriptInIsolatedWorld: async () => (runs++, panel) } };
+    adapter.tracker = { status: () => ({ logged_in: true }) };
+    const logs: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => logs.push(String(line));
+    try {
+      for (let i = 0; i < 3; i++) await adapter.prepareSendOptions();
+      panel = "open";
+      await adapter.prepareSendOptions();
+      await adapter.prepareSendOptions();
+    } finally {
+      console.log = log;
+    }
+    assert.equal(runs, 4);
+    assert.deepEqual(logs.filter((l) => l.includes("prepare result")), [
+      "[shop-x] platform send options prepare result=pdd_video_entry_missing",
+      "[shop-x] platform send options prepare result=already",
+    ]);
+  });
+});

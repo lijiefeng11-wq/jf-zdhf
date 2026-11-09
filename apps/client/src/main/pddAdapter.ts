@@ -1042,6 +1042,8 @@ export class PddPageAdapter implements PlatformAdapter {
   /** 最近一次完整视频库列表（第一页、无搜索），按页面顺序。 */
   private videoRows: VideoRow[] | null = null;
   private optionsPrepared = false;
+  /** 上次展开视频弹窗的结果：每 15 秒重试，结果不变时不重复记日志（没打开对话时入口本就不在）。 */
+  private prepareResult: string | null = null;
   /** 进行中的预热；发送与准备开始前先让它在下一步之间停下（不以“忙”拒绝发送）。 */
   private warmRun: { ctrl: AbortController; done: Promise<void> } | null = null;
   /**
@@ -2139,7 +2141,8 @@ export class PddPageAdapter implements PlatformAdapter {
         await sleep(800);
         await this.closeVideoPanel();
       }
-      console.log(`[${this.shopId}] platform send options prepare result=${result}`);
+      if (result !== this.prepareResult) console.log(`[${this.shopId}] platform send options prepare result=${result}`);
+      this.prepareResult = result;
     } finally {
       this.sending = false;
     }
@@ -3163,6 +3166,7 @@ export class PddPageAdapter implements PlatformAdapter {
     if (e.type === "session_ended" && e.reason === "platform_logged_out") this.health.sessionEnded(false);
     if (e.type === "session_started" || e.type === "session_ended") {
       this.optionsPrepared = false;
+      this.prepareResult = null;
       this.videoRows = null;
       this.goodsRows.clear();
       this.goodsTabAt.clear();

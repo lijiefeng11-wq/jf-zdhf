@@ -97,6 +97,17 @@ class MultimodalTests(unittest.TestCase):
                 self.assertNotEqual(decide(job([message("card", card=other)], "hybrid"), CONFIG)["reason"], "order_remark_card")
                 post.assert_called_once()
 
+    def test_after_sale_request_card_hands_off_without_the_model(self):
+        card = {"type": "order", "title": "消费者申请售后", "description": "虚构提示",
+                "fields": [{"label": "申请类型", "value": "退货退款"}, {"label": "申请说明", "value": "虚构说明"}]}
+        latest = message("card", content="消费者申请售后：申请类型 退货退款；申请说明 虚构说明", card=card)
+        validate_content([latest], require)
+        for mode in ("hybrid", "rules", "model"):
+            with self.subTest(mode=mode), patch("backend.engine._post") as post:
+                result = decide(job([message(name="old"), latest], mode), CONFIG)
+                self.assertEqual((result["action"], result["reason"]), ("handoff", "after_sale_request"))
+                post.assert_not_called()
+
     def test_delayed_message_and_rules_miss_model_fallback(self):
         item = job([message(content="商品规格", created_at=time.time()-3600)], "hybrid")
         item["payload"]["received_at"] -= 3600
