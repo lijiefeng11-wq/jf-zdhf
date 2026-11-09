@@ -58,7 +58,10 @@ function harness(opts: Options = {}) {
   a.window = page; a.tracker = { status: () => ({ logged_in: true, identity: { platform_shop_id: "mall-1" } }) };
   a.freshActive = async () => "9001";
   const opened: string[] = [];
-  a.openConversation = async (uid: string) => { opened.push(uid); return opts.openFails ?? null; };
+  a.openConversation = async (uid: string) => {
+    assert.equal(a.sending, true, "switching conversations must own the page");
+    opened.push(uid); return opts.openFails ?? null;
+  };
   a.starMarked = async () => {
     assert.equal(a.sending, true, "execution-time reads must own the page");
     return opts.stateReadHangs ? new Promise(() => {}) : opts.marked === undefined ? false : opts.marked;

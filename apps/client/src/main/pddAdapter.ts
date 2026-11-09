@@ -746,6 +746,8 @@ type TransferHooks = {
   check: () => string | null;
   click: (pt: Point, action: boolean, beforePress?: () => void) => Promise<PageClickResult>;
   unmark: (pt: Point) => Promise<PageClickResult>;
+  /** 占用页面后、第一次核对前切到该买家的会话（转接只对当前打开的会话执行）；失败返回原因。 */
+  open: () => Promise<string | null>;
 };
 
 /** 页面内可见、文字恰为 text 的最深层元素中心坐标，排除位于 exclude 内的元素。不唯一或缺失时返回原因。 */
@@ -2882,14 +2884,8 @@ export class PddPageAdapter implements PlatformAdapter {
     try {
       const blocked = check();
       if (blocked) return { status: "not_sent", reason: blocked };
-      // 和发文字、标星一样先切到该买家的会话：转接只对当前打开的会话执行，停在别的会话上就会核对失败。
-      const notOpened = await this.openConversation(request.conversation_id, request.deadline, check, 1000);
-      if (notOpened) {
-        console.log(`[${this.shopId}] transfer not_started reason=${notOpened}`);
-        return { status: "not_sent", reason: notOpened };
-      }
       const result = await this.performTransfer(request.account, true, this.convTokenFor(request.conversation_id), request.deadline * 1000, request.allow_unmark,
-        { check, click, unmark: pt => click(pt, true, request.before_unmark) });
+        { check, click, unmark: pt => click(pt, true, request.before_unmark), open: () => this.openConversation(request.conversation_id, request.deadline, check, 1000) });
       const completed = result === "confirmed:left_list_observed" || result === "confirmed:left_list_observed,unfavorited";
       const completionBlocker = completed ? check() : null;
       if (started && completed && (!completionBlocker || completionBlocker === "reply_deadline_exceeded")) {
@@ -2897,7 +2893,7 @@ export class PddPageAdapter implements PlatformAdapter {
       }
       if (started) return { status: "unknown", reason: "transfer_binding_unproven", page_observed: result.includes("left_list_observed") ? "left_list" : "unknown" };
       const detail = result.startsWith("not_executed:") ? result.slice("not_executed:".length) : "not_started";
-      const reason = detail.startsWith("transfer_") || detail.startsWith("conv_state_") ? detail : "transfer_" + detail;
+      const reason = detail.startsWith("transfer_") || detail.startsWith("conv_state_") || detail.startsWith("pdd_") ? detail : "transfer_" + detail;
       console.log(`[${this.shopId}] transfer not_started reason=${reason}`);
       return { status: "not_sent", reason };
     } catch {
@@ -2981,6 +2977,9 @@ export class PddPageAdapter implements PlatformAdapter {
     let opened = false;
     let popoverMaybe = false;
     try {
+      // 和发文字、标星一样先切到该买家的会话；在页面互斥（sending）之内进行，期间不会有自动点开其他会话或预热。
+      const notOpened = hooks ? await hooks.open() : null;
+      if (notOpened) return `not_executed:${notOpened}`;
       let blocked = await gate();
       if (blocked) return `not_executed:${blocked}`;
       const scan = hooks ? await read<Scan>(SCAN).catch(() => null) : await this.scanKeepingFresh();
