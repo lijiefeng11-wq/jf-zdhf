@@ -63,6 +63,13 @@ def validate_config(config):
     v2 = config.get("vehicle_lookup_v2", [])
     require(isinstance(v2, list) and all(isinstance(shop, str) and shop in knowledge for shop in v2)
             and len(set(v2)) == len(v2), "invalid_vehicle_lookup_v2_config")
+    brain_shops = config.get("conversation_brain", [])
+    require(isinstance(brain_shops, list) and all(isinstance(shop, str) and shop in shop_ids for shop in brain_shops)
+            and len(set(brain_shops)) == len(brain_shops), "invalid_conversation_brain_config")
+    require(config.get("brain_primary_slot", "primary") in ("primary", "backup"), "invalid_brain_primary_slot")
+    if "brain_request_timeout_seconds" in config:
+        value = config["brain_request_timeout_seconds"]
+        require(type(value) is int and 1 <= value <= modelconfig.MAX_TIMEOUT_SECONDS, "invalid_brain_timeout")
 
 
 def reject_constant(_):
@@ -657,7 +664,15 @@ class Server(ThreadingHTTPServer):
                     job["product_notes"] = notes
                 catalog = self.vehicle_catalogs.get(job["shop_id"])
                 forced = None
-                if catalog is not None and job["shop_id"] in self.config.get("vehicle_lookup_v2", []):
+                if job["shop_id"] in self.config.get("conversation_brain", []) and job["settings"]["mode"] != "rules":
+                    job["conversation_brain"] = True
+                    job.setdefault("deadline_monotonic", time.monotonic() + 20)
+                    job["brain_primary_slot"] = self.config.get("brain_primary_slot", "primary")
+                    job["brain_request_timeout_seconds"] = self.config.get("brain_request_timeout_seconds")
+                    job["brain_catalog"] = catalog
+                    job["brain_product_docs"] = self.products.docs(job["shop_id"])
+                    job.update(self.store.conversation_context(job))
+                elif catalog is not None and job["shop_id"] in self.config.get("vehicle_lookup_v2", []):
                     context = job["payload"]["context"]
                     found = catalog.conversation(context["messages"], context.get("orders", []))
                     if found is not None:

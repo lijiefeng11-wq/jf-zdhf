@@ -118,6 +118,9 @@ class Store:
         CREATE TABLE IF NOT EXISTS shop_reply_templates (shop_id TEXT PRIMARY KEY, template_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS leases (shop_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS model_settings (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS conversation_memory (
+          shop_id TEXT NOT NULL, conversation_id TEXT NOT NULL, payload TEXT NOT NULL,
+          PRIMARY KEY(shop_id,conversation_id));
         CREATE TABLE IF NOT EXISTS delivery_verifications (
           shop_id TEXT NOT NULL, event_id TEXT NOT NULL, administrator TEXT NOT NULL,
           outcome TEXT NOT NULL, note TEXT NOT NULL, verified_at REAL NOT NULL,
@@ -707,10 +710,29 @@ class Store:
             with self.lock:
                 candidates.close()
 
+    def conversation_context(self, job):
+        """Private decision context; never added to the client event contract."""
+        shop, conversation = job["shop_id"], job["payload"]["conversation_id"]
+        with self.lock:
+            saved = self.db.execute("SELECT payload FROM conversation_memory WHERE shop_id=? AND conversation_id=?",
+                                    (shop, conversation)).fetchone()
+            current = self.db.execute("SELECT created_at FROM events WHERE shop_id=? AND event_id=?", (shop, job["event_id"])).fetchone()
+            rows = self.db.execute("SELECT decision,delivery,created_at FROM events WHERE shop_id=? AND conversation_id=? "
+                                   "AND created_at<? AND decision IS NOT NULL ORDER BY created_at DESC LIMIT 6",
+                                   (shop, conversation, current[0])).fetchall()
+            deliveries = []
+            for row in reversed(rows):
+                result, delivery = json.loads(row["decision"]), json.loads(row["delivery"])
+                deliveries.append({"action": result["action"], "text": result.get("text", ""), "created_at": row["created_at"],
+                                   "status": delivery["status"], "verified_outcome": (delivery.get("verification") or {}).get("outcome")})
+            return {"conversation_memory": json.loads(saved[0]) if saved else {}, "previous_deliveries": deliveries}
+
     def _finish(self, shop, event, decision):
         self.db.execute("UPDATE events SET state='ready',decision=? WHERE shop_id=? AND event_id=?", (json.dumps(decision, ensure_ascii=False), shop, event))
 
     def finish(self, job, decision):
+        decision = dict(decision)
+        memory = decision.pop("_conversation_memory", None)
         with self.lock, self.db:
             row = self.db.execute("SELECT * FROM events WHERE shop_id=? AND event_id=?", (job["shop_id"], job["event_id"])).fetchone()
             self._expire_deadline(row)
@@ -718,6 +740,17 @@ class Store:
             if row["state"] != "processing":
                 # A duplicate/late completion cannot overwrite an existing decision or delivery.
                 return json.loads(row["decision"]) if row["decision"] else {"action": "none", "text": "", "reason": "superseded", "expires_at": time.time()}
+            if memory is not None and job.get("conversation_brain"):
+                try:
+                    require(self._is_latest(row), "superseded", 409)
+                    settings = self._settings(row["shop_id"])
+                    require(settings["enabled"] and settings["version"] == row["settings_version"], "settings_changed", 409)
+                    self._check_lease({"shop_id": row["shop_id"], "client_id": row["client_id"]}, json.loads(row["payload"]))
+                except ApiError:
+                    pass  # A late model result must not overwrite the active conversation's facts.
+                else:
+                    self.db.execute("INSERT OR REPLACE INTO conversation_memory VALUES (?,?,?)",
+                                    (row["shop_id"], row["conversation_id"], json.dumps(memory, ensure_ascii=False)))
             decision = self._action_fallback(job, decision)
             if decision.get("action") in ("reply", "send_item", "mark", "transfer"):
                 # Re-read all permission inputs after asynchronous model work.

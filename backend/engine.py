@@ -54,6 +54,9 @@ def decide(job, model_config=None):
     result = immediate_decision(job)
     if result is not None:
         return result
+    if job.get("conversation_brain"):
+        from . import brain
+        return brain.decide(job, model_config or {})
     if job.get("card_greeting"):
         return decision("reply", "goods_card_greeting", job["card_greeting"])
     knowledge = {"vehicle_context": job["vehicle_knowledge"]} if "vehicle_knowledge" in job else {}
