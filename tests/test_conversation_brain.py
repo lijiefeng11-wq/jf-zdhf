@@ -91,6 +91,19 @@ class BrainTests(unittest.TestCase):
         result, _ = self.run_brain(work, tool(args={"parts": [{"source_id": "new", "quote": "22款"}, {"source_id": "old", "quote": "示例车A"}]}), completion(answer("", "vehicle_fitment", rule_id="vehicle_fit")))
         self.assertEqual(result["text"], engine.vehicle_match.FIT_REPLY)
 
+    def test_equal_timestamp_lookup_uses_history_order_not_tool_part_order(self):
+        work = job(message("old", "示例车A 22款", when=1), message("new", "18款", when=1))
+        work["brain_catalog"] = self.catalog
+        args = {"parts": [{"source_id": "new", "quote": "18款"}, {"source_id": "old", "quote": "示例车A 22款"}]}
+        facts = conversation_memory.sources(work["payload"]["context"], {})
+        found = brain._lookup(work, args, facts)
+        self.assertEqual(found["status"], "year_mismatch")
+        with self.assertRaises(engine.ProviderFailure):
+            brain._final(work, completion(answer("", "vehicle_fitment", rule_id="vehicle_fit"))["choices"][0]["message"], found["rules"], found)
+        work["payload"]["context"]["messages"] = [facts["new"]]
+        with self.assertRaisesRegex(engine.ProviderFailure, "ambiguous_evidence_order"):
+            brain._lookup(work, args, facts)
+
     def test_car_quote_excludes_unrelated_business_language(self):
         work = job(message("m1", "前面的事已经处理好了。我另外一辆示例车A也想买，22款的能用吗"))
         parts = [{"source_id": "m1", "quote": "示例车A"}, {"source_id": "m1", "quote": "22款"}]

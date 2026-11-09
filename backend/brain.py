@@ -66,7 +66,13 @@ def _lookup(job, args, facts):
                 or not 0 < len(quote.strip()) <= 200 or quote not in facts[key]["content"]):
             raise engine.ProviderFailure("invalid_tool_arguments")
         selected.setdefault(key, []).append(quote)
-    messages = sorted(({**facts[key], "content": " ".join(quotes)} for key, quotes in selected.items()), key=lambda m: m["created_at"])
+    messages = [{**facts[key], "content": " ".join(quotes)} for key, quotes in selected.items()]
+    positions = {m["id"]: index for index, m in enumerate(job["payload"]["context"]["messages"])}
+    for index, message in enumerate(messages):
+        for previous in messages[:index]:
+            if message["created_at"] == previous["created_at"] and (message["id"] not in positions or previous["id"] not in positions):
+                raise engine.ProviderFailure("ambiguous_evidence_order")
+    messages.sort(key=lambda m: (m["created_at"], positions.get(m["id"], -1)))
     catalog = job.get("brain_catalog")
     if catalog is None:
         return {"status": "unavailable", "hint": "未提供车型表，不能判断是否适配", "rules": []}
