@@ -12,7 +12,7 @@ class Element {
   querySelectorAll(selector) { const match=n=>selector.split(',').some(s=>s.trim().startsWith('.') ? n.className.split(' ').includes(s.trim().slice(1)) : n.tagName===s.trim());return this.children.flatMap(n=>[...(match(n)?[n]:[]),...n.querySelectorAll(selector)]); }
 }
 let source=fs.readFileSync(path.join(__dirname,'../backend/static/app.js'),'utf8');
-source=source.replace(/  if \(document.readyState === "loading"\) \{[\s\S]*?\n  \}\n\}\)\(\);\s*$/, '  globalThis.fixture={state,el,IDS,renderSettings,onTemplateChange,saveSettings,onFormEdit,onShopFormEdit,applyRemoteSettings,syncTemplateSelect,collectRules,loadTemplateEditor,saveTemplate,newTemplate,onEditorTemplateChange,resetTemplateEditor,applyTemplatesSnapshot,openShopTemplate,showRulesError};\n})();');
+source=source.replace(/  if \(document.readyState === "loading"\) \{[\s\S]*?\n  \}\n\}\)\(\);\s*$/, '  globalThis.fixture={state,el,IDS,renderSettings,onTemplateChange,saveSettings,onFormEdit,onShopFormEdit,applyRemoteSettings,syncTemplateSelect,collectRules,loadTemplateEditor,saveTemplate,newTemplate,onEditorTemplateChange,resetTemplateEditor,applyTemplatesSnapshot,openShopTemplate,showRulesError,renderDecisionRuntime,decisionDetails};\n})();');
 const plain=x=>JSON.parse(JSON.stringify(x));
 const shared={mode:'hybrid',system_prompt:'共用提示词',rules:[{id:'r',contains:'规格',reply:'请补充车型'}]};
 const tpl={template_id:'a'.repeat(32),name:'共用模版',version:3,...shared};
@@ -50,6 +50,30 @@ function setup(handler) {
 }
 let passed=0;
 (async()=>{
+  {
+    const {h,ids}=setup();
+    h.state.shopStatus='ok';
+    h.state.shops[0].decision_runtime={mode:'conversation_brain',enabled:true,persistent_memory:true,total_budget_seconds:20,
+      models:[{slot:'backup',model:'<img src=x onerror=alert(1)>',configured:true,timeout_seconds:15},
+        {slot:'primary',model:'local',configured:true,timeout_seconds:15}]};
+    h.state.shops[1].decision_runtime={mode:'rules',enabled:false,brain_configured:true,models:[]};
+    h.renderDecisionRuntime();
+    const text=node=>node.textContent+node.children.map(text).join('');
+    assert.match(text(ids['shop-decision-runtime']),/新决策模式 · 已启用/);
+    assert.match(text(ids['shop-decision-runtime']),/单次 15 秒/);
+    assert.match(text(ids['shop-decision-runtime']),/最多 20 秒/);
+    assert.equal(ids['shop-decision-runtime'].querySelectorAll('img').length,0);
+    assert.match(text(ids['shop-decision-runtime']),/<img src=x/);
+    h.state.selectedShopId='b';h.renderDecisionRuntime();
+    assert.match(text(ids['shop-decision-runtime']),/纯规则 · 已暂停/);
+    assert.match(text(ids['shop-decision-runtime']),/不调用模型/);
+    h.state.shopStatus='error';h.renderDecisionRuntime();
+    assert.match(text(ids['model-decision-runtime']),/状态未确认/);
+    assert.doesNotMatch(text(ids['model-decision-runtime']),/已启用|单次 15/);
+    h.state.shops=[];h.renderDecisionRuntime();
+    assert.doesNotMatch(text(ids['model-decision-runtime']),/虚构甲店|cloud|local/);
+    passed++;
+  }
   {
     const {h,ids,calls}=setup();
     assert.equal(ids['prompt-input'].value,local.system_prompt);assert.equal(h.state.editor.id,'');

@@ -107,6 +107,7 @@
     "page-dashboard", "page-scripts", "page-templates", "page-chat-import", "page-records", "page-model", "page-system",
     "shop-connection-list", "shop-connection-summary", "shop-connection-meta",
     "shop-select", "shop-meta", "settings-version", "lease-status", "lease-details",
+    "shop-decision-runtime", "model-decision-runtime",
     "template-select", "template-create", "template-help", "template-status",
     "template-editor-form", "template-editor-select", "template-name", "template-new", "template-save", "template-save-as",
     "template-reset", "template-editor-status", "template-editor-version", "template-source-note",
@@ -588,7 +589,66 @@
     node.title = "已连接后台的店铺数 / 配置店铺数";
   }
 
+  function decisionDetails(shop) {
+    const runtime = shop && shop.decision_runtime;
+    if (state.shopStatus !== "ok" || !runtime) return [["决策流程", "状态未确认，请刷新"]];
+    const mode = runtime.mode === "conversation_brain" ? "新决策模式" : runtime.mode === "rules" ? "纯规则" : "传统模型流程";
+    const rows = [["决策流程", mode + (runtime.enabled ? " · 已启用" : " · 已暂停")]];
+    if (runtime.mode === "rules") {
+      rows.push(["模型调用", "不调用模型"], ["会话记忆", "不更新持久记忆"]);
+      if (runtime.brain_configured) rows.push(["新模式", "已配置；当前纯规则方式不使用"]);
+      return rows;
+    }
+    (runtime.models || []).forEach(function (model, index) {
+      const label = model.slot === "backup" ? "备用模型配置" : "主模型配置";
+      rows.push([index === 0 ? "优先尝试" : "故障后尝试", model.configured
+        ? model.model + "（" + label + "） · 单次 " + model.timeout_seconds + " 秒"
+        : label + "未配置，将跳过"]);
+    });
+    rows.push(["会话记忆", runtime.persistent_memory ? (runtime.enabled ? "启用有原文来源的持久记忆" : "已配置，暂停更新") : "仅使用本次提交的上下文"]);
+    if (runtime.total_budget_seconds) rows.push(["决策总预算", "最多 " + runtime.total_budget_seconds + " 秒；客户端剩余预算更少时提前截止"]);
+    return rows;
+  }
+
+  function fillDecisionDetails(node, shop) {
+    node.replaceChildren();
+    decisionDetails(shop).forEach(function (pair) {
+      const row = document.createElement("div");
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      setText(dt, pair[0]);
+      setText(dd, pair[1]);
+      row.appendChild(dt);
+      row.appendChild(dd);
+      node.appendChild(row);
+    });
+  }
+
+  function renderDecisionRuntime() {
+    fillDecisionDetails(el["shop-decision-runtime"], currentShop());
+    const list = el["model-decision-runtime"];
+    list.replaceChildren();
+    if (!state.shops.length) {
+      const empty = document.createElement("p");
+      setText(empty, "尚未取得店铺运行配置。");
+      list.appendChild(empty);
+    }
+    state.shops.forEach(function (shop) {
+      const card = document.createElement("article");
+      card.className = "shop-card";
+      const title = document.createElement("h4");
+      setText(title, shopName(shop));
+      const details = document.createElement("dl");
+      details.className = "detail-list";
+      fillDecisionDetails(details, shop);
+      card.appendChild(title);
+      card.appendChild(details);
+      list.appendChild(card);
+    });
+  }
+
   function renderShopConnections() {
+    renderDecisionRuntime();
     const list = el["shop-connection-list"];
     list.replaceChildren();
     const summary = el["shop-connection-summary"];
@@ -670,7 +730,7 @@
         ["客户端实例", lease ? textOrDash(lease.instance_id) : "–"],
         ["最近心跳", Number.isFinite(heartbeat) ? formatTime(heartbeat) : "–"],
         ["连接有效至", Number.isFinite(expires) ? formatTime(expires) : "–"]
-      ].forEach(function (pair) {
+      ].concat(decisionDetails(shop).slice(0, 2)).forEach(function (pair) {
         const row = document.createElement("div");
         const dt = document.createElement("dt");
         setText(dt, pair[0]);
@@ -1659,6 +1719,7 @@
     state.shopStatus = "unknown";
     state.shopError = "";
     state.shopUpdatedAt = null;
+    renderDecisionRuntime();
 
     el["dashboard"].hidden = true;
     el["login-view"].hidden = false;
@@ -2284,6 +2345,7 @@
   }
 
   function renderShopHeader() {
+    renderDecisionRuntime();
     if (productLearning) productLearning.refresh();
     const shop = currentShop();
     if (!shop) {
@@ -2607,7 +2669,7 @@
     }
     note.className = "model-note";
     setText(note, "主模型" + (primary ? "已配置" : "未配置") + "，备用" + (backup ? "已配置" : "未配置") +
-      "。连接、超时、HTTP 错误或返回不可用时自动切换一次；两者都失败才转人工。");
+      "。各店铺的优先顺序和有效超时见上方运行配置；故障后仅在剩余预算内尝试另一模型，不能保证一定有时间切换。");
   }
 
   function renderModelTestStatus(slot) {
