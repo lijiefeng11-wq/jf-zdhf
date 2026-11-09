@@ -813,10 +813,18 @@ def _named(catalog, text):
     return False
 
 
+# Keep these whole expressions local to the non-car check: removing "看看" / "咋" or bare digits
+# from vehicle queries would also erase potential car names, codes and year answers.
+PURCHASE_QUESTION = re.compile(r"我?(?:现在|先|该)?(?:看看|看一下|看下)?(?:咋|怎么|如何)(?:下单|拍下|拍|购买|买|付款)")
+MONEY = re.compile(r"(?<![a-z0-9.])(?:\d{1,6}(?:\.\d{1,2})?\s*(?:元|块钱?|人民币)|"
+                   r"[¥￥]\s*\d{1,6}(?:\.\d{1,2})?(?:\s*元)?)(?![a-z0-9.])")
+
+
 def _no_car_words(text):
     """Nothing but greetings, order or goods talk, punctuation and words that are never part of a car name ("后窗",
     "在吗", "下单了", "这个透光吗")."""
-    rest = FILLER.sub(" ", SHOP_TALK.sub(" ", PRODUCT_TALK.sub(" ", GREETING.sub(" ", _normalize(text)))))
+    rest = MONEY.sub(" ", PURCHASE_QUESTION.sub(" ", _normalize(text)))
+    rest = FILLER.sub(" ", SHOP_TALK.sub(" ", PRODUCT_TALK.sub(" ", GREETING.sub(" ", rest))))
     return not re.sub(r"[\s，。？！,.?!~～、…：:;；]", "", FOLLOW_UP_FILLER.sub("", rest))
 
 
