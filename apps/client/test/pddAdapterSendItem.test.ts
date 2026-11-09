@@ -337,8 +337,25 @@ describe("拼多多适配器：准备预算与预热（Electron 替身）", () =
     };
     adapter.tracker = { status: () => ({ logged_in: true }), lastLoadedAt: () => 0 };
     adapter.sendOptions.response("/latitude/order/userAllOrder", { uid: BUYER }, ORDER, 1);
+    // 页签已选中、推荐商品早已读到：准备阶段不再等列表（没读到时的等待另有测试）。
+    adapter.goodsRows.set(BUYER, { rows: [], at: 1 });
     return { adapter, steps };
   }
+
+  test("商品页签已选中但还没读到推荐商品：等列表到了再继续，免得提交后候选变化使判断失效", async () => {
+    const { adapter, steps } = page();
+    adapter.goodsRows.delete(BUYER);
+    setTimeout(() => adapter.goodsRows.set(BUYER, { rows: [], at: Date.now() }), 300);
+    const started = Date.now();
+    await adapter.sendOptionsSettled(BUYER, 2000);
+    assert.ok(Date.now() - started >= 280, "waited for the late goods list");
+    assert.ok(steps.indexOf("orders_tab") > steps.indexOf("goods_tab"));
+    // 已读到过就不再等。
+    adapter.goodsTabAt.delete(BUYER);
+    const again = Date.now();
+    await adapter.sendOptionsSettled(BUYER, 2000);
+    assert.ok(Date.now() - again < 280);
+  });
 
   test("准备预算不足 1 秒：读完商品与订单就返回，不在准备中打开说明书对话框", async () => {
     const { adapter, steps } = page({ instructButtons: 2 });
@@ -453,6 +470,7 @@ describe("拼多多适配器：说明书部分收集与预热续读（Electron �
     };
     adapter.tracker = { status: () => ({ logged_in: true }) };
     adapter.sendOptions.response("/latitude/order/userAllOrder", { uid: BUYER }, { success: true, result: { orders: [{ uid: Number(BUYER), orderSn: "sn-1", orderGoodsList: goods.map((goodsId) => ({ goodsId, goodsName: "虚构商品" })) }] } }, 1);
+    adapter.goodsRows.set(BUYER, { rows: [], at: 1 });
     const stale = () => adapter.sendOptions.instructStale(BUYER, Math.floor(Date.now() / 1000), 600).length;
     /** 页面按钮顺序变化（原地修改，模拟订单区重排、插入或删除）。 */
     const setButtons = (next: number[]) => buttons.splice(0, buttons.length, ...next);
