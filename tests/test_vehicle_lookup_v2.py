@@ -81,6 +81,17 @@ class FictionalTable(unittest.TestCase):
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "发货几天"))["status"], "no_vehicle")
         self.assertEqual(self.talk(("buyer", "示例车A 22款"), ("agent", "x"), ("buyer", "在吗"))["status"], "no_vehicle")
 
+    def test_greetings_name_no_car(self):
+        # "在呢" once left "在" behind as an unknown car and got "这款车暂时没有对应的尺寸".
+        for text in ("在呢", "在", "在不", "在没", "还在吗", "在线吗", "在线", "有人在吗", "有人吗", "嗨", "在呢在呢", "哈喽在呢"):
+            with self.subTest(text=text):
+                self.assertEqual(self.talk(("buyer", text))["status"], "no_vehicle")
+                # Also after an unknown car asked about earlier.
+                self.assertEqual(self.talk(("buyer", "完全没有的车"), ("agent", "在呢"), ("buyer", text))["status"], "no_vehicle")
+        # A car said along with the greeting is still looked up.
+        self.assertEqual(self.talk(("buyer", "在吗 示例车A 22款"))["status"], "matched")
+        self.assertEqual(self.talk(("buyer", "在吗 完全没有的车"))["status"], "not_found")
+
     def test_goods_questions_name_no_car(self):
         # Material, light, function and fitting questions are about the goods: never "the table lacks this car".
         for text in ("这个透光吗", "透不透光", "什么材质的", "有什么功能", "需要打孔吗怎么固定", "有吸盘吗", "怎么收纳",

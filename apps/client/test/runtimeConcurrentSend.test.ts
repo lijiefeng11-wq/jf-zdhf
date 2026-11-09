@@ -9,7 +9,8 @@ let release: (() => void) | null = null;
 beforeEach(async () => {
   backend = await startBackend();
   await backend.settings("shop-a", true);
-  h = await makeShop({ backend });
+  // 被挂起的第一条发送要一直占住平台页面直到放行：默认 800ms 超时在慢机器上会先放开队列，第二条在切换观察前就申请许可。
+  h = await makeShop({ backend, timing: { sendTimeoutMs: 15000 } });
 });
 afterEach(async () => {
   release?.(); release = null;
