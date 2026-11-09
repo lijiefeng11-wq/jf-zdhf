@@ -38,7 +38,7 @@ const OPEN = { x: 100, y: 100 }, ROW = { x: 300, y: 200 }, CONFIRM = { x: 400, y
 
 type Options = {
   names?: readonly string[]; marked?: boolean | null; hangingRows?: boolean; rowDelay?: number;
-  onRow?: (a: any) => void; stateReadHangs?: boolean;
+  onRow?: (a: any) => void; stateReadHangs?: boolean; openFails?: string;
   observation?: "missing" | "present" | "empty" | "malformed" | "page_changed" | "login_changed" | "input";
 };
 function harness(opts: Options = {}) {
@@ -57,6 +57,11 @@ function harness(opts: Options = {}) {
   } } } };
   a.window = page; a.tracker = { status: () => ({ logged_in: true, identity: { platform_shop_id: "mall-1" } }) };
   a.freshActive = async () => "9001";
+  const opened: string[] = [];
+  a.openConversation = async (uid: string) => {
+    assert.equal(a.sending, true, "switching conversations must own the page");
+    opened.push(uid); return opts.openFails ?? null;
+  };
   a.starMarked = async () => {
     assert.equal(a.sending, true, "execution-time reads must own the page");
     return opts.stateReadHangs ? new Promise(() => {}) : opts.marked === undefined ? false : opts.marked;
@@ -91,7 +96,7 @@ function harness(opts: Options = {}) {
     }
     return "unexpected_script";
   };
-  return { a, page, clicks, scripts, keys, isDialogOpen: () => dialogOpen, isConversationOpen: () => conversationOpen, hasObserved: () => observed, setDialogOpen: () => { dialogOpen = true; } };
+  return { a, page, clicks, scripts, keys, opened, isDialogOpen: () => dialogOpen, isConversationOpen: () => conversationOpen, hasObserved: () => observed, setDialogOpen: () => { dialogOpen = true; } };
 }
 function request(extra = {}) { return { conversation_id: "9001", account: "fictional-main", allow_unmark: false,
   attempt_id: "fictional-attempt", deadline: Date.now() / 1000 + 10, recheck: (): string | null => null, ...extra }; }
@@ -101,8 +106,15 @@ test("on-demand transfer needs no recipient cache and opens its dialog once", as
   assert.equal(result.status, "confirmed");
   assert.equal(result.page_observed, "left_list");
   assert.deepEqual(h.clicks, ["open", "row", "confirm"]);
+  assert.deepEqual(h.opened, ["9001"], "switches to the buyer's conversation before transferring");
   assert.equal(h.a.sending, false); assert.equal(h.a.markWatch, null);
   assert(h.scripts.some(s => s.includes('"fictional-main"') && s.includes("target_button_not_unique")));
+});
+
+test("buyer conversation cannot be opened: not_sent with that reason and no click", async () => {
+  const h = harness({ openFails: "pdd_conversation_not_in_list" }), result = await h.a.transferConversation(request());
+  assert.deepEqual(result, { status: "not_sent", reason: "pdd_conversation_not_in_list" });
+  assert.deepEqual(h.clicks, []); assert.equal(h.a.sending, false); assert.equal(h.a.markWatch, null);
 });
 
 test("recipient loading longer than the former preparation budget still transfers within the send deadline", async () => {

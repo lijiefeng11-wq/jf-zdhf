@@ -201,6 +201,11 @@ const ACTION_FIELDS = new Set(
 const ACTION_SCHEMA_DEPTH = 8;
 /** 诊断转移上下文的有效期：转移结果与关闭会话的请求在此之内到达才关联到本次诊断转移。 */
 const TRANSFER_PROBE_CTX_MS = 120_000;
+/** 平台点“转移会话”后先请求可转接客服名单，返回非空才显示转移对话框（见平台 getNewOnlineAssign）。 */
+const ASSIGN_LIST_PATH = "/latitude/assign/getAssignCsList";
+/** 等转移对话框：名单请求还在路上时最多等这么久（自点击起），其余情况沿用 3 秒。 */
+const TRANSFER_DIALOG_WAIT_MS = 3000;
+const TRANSFER_DIALOG_LIST_WAIT_MS = 8000;
 const ACTION_SCHEMA_NODES = 2000;
 
 /**
@@ -741,6 +746,8 @@ type TransferHooks = {
   check: () => string | null;
   click: (pt: Point, action: boolean, beforePress?: () => void) => Promise<PageClickResult>;
   unmark: (pt: Point) => Promise<PageClickResult>;
+  /** 占用页面后、第一次核对前切到该买家的会话（转接只对当前打开的会话执行）；失败返回原因。 */
+  open: () => Promise<string | null>;
 };
 
 /** 页面内可见、文字恰为 text 的最深层元素中心坐标，排除位于 exclude 内的元素。不唯一或缺失时返回原因。 */
@@ -1014,6 +1021,8 @@ export class PddPageAdapter implements PlatformAdapter {
   /** 诊断转移（transferTest）的上下文：seq 为本进程内递增的诊断批次序号；账号名只在内存里比较，不写盘。 */
   private transferProbeCtx: { seq: number; target: string; epoch: number; startedAt: number; attemptAt: number | null } | null = null;
   private transferDiagSeq = 0;
+  /** 正式转接点“转移会话”后，平台客服名单请求的进展：未发出 / 进行中 / 有名单 / 名单为空 / 失败。只记状态，不留内容。 */
+  private csList: { state: "waiting" | "requested" | "ready" | "empty" | "failed"; id: string | null } | null = null;
   /**
    * 诊断模式下各客服列表类接口（/latitude/assign/*，按路径区分来源）最近一次结果：候选与键值，只在内存里与转移请求的 csid 比较，不写盘。
    * at 为该响应对应请求的发出时间（迟到的响应不重新计时）；candidates/tokens 为 null 表示该来源最近一次无法解析或读取失败。
@@ -1112,8 +1121,33 @@ export class PddPageAdapter implements PlatformAdapter {
       seen.add(key);
       write({ kind, path: p, schema });
     };
+    /** 正式转接等待对话框期间：平台客服名单请求的进展（与其余监听互不影响，不提前返回）。 */
+    const watchCsList = (method: string, params: any) => {
+      const list = this.csList;
+      if (!list) return;
+      if (method === "Network.requestWillBeSent" && list.state === "waiting") {
+        try {
+          const url = new URL(params.request?.url);
+          if (url.hostname === "mms.pinduoduo.com" && url.pathname === ASSIGN_LIST_PATH) this.csList = { state: "requested", id: params.requestId };
+        } catch {
+          // 非法地址不是名单请求。
+        }
+      } else if (method === "Network.loadingFinished" && list.state === "requested" && params.requestId === list.id) {
+        dbg.sendCommand("Network.getResponseBody", { requestId: params.requestId })
+          .then((r: any) => {
+            const result = (jsonOrNull(r.base64Encoded ? null : r.body) as { result?: unknown } | null)?.result;
+            // 与平台相同的判断：result 为非空对象（或数组）才会打开对话框。
+            const filled = typeof result === "object" && result !== null && Object.values(result).length > 0;
+            if (this.csList === list) this.csList = { state: filled ? "ready" : "empty", id: null };
+          })
+          .catch(() => { if (this.csList === list) this.csList = { state: "failed", id: null }; });
+      } else if (method === "Network.loadingFailed" && list.state === "requested" && params.requestId === list.id) {
+        this.csList = { state: "failed", id: null };
+      }
+    };
     dbg.on("message", (_e, method, params: any, sessionId?: string) => {
       if (sessionId) return;
+      watchCsList(method, params);
       if (method === "Network.requestWillBeSent") {
         if (transferFile) {
           try {
@@ -2851,7 +2885,7 @@ export class PddPageAdapter implements PlatformAdapter {
       const blocked = check();
       if (blocked) return { status: "not_sent", reason: blocked };
       const result = await this.performTransfer(request.account, true, this.convTokenFor(request.conversation_id), request.deadline * 1000, request.allow_unmark,
-        { check, click, unmark: pt => click(pt, true, request.before_unmark) });
+        { check, click, unmark: pt => click(pt, true, request.before_unmark), open: () => this.openConversation(request.conversation_id, request.deadline, check, 1000) });
       const completed = result === "confirmed:left_list_observed" || result === "confirmed:left_list_observed,unfavorited";
       const completionBlocker = completed ? check() : null;
       if (started && completed && (!completionBlocker || completionBlocker === "reply_deadline_exceeded")) {
@@ -2859,7 +2893,7 @@ export class PddPageAdapter implements PlatformAdapter {
       }
       if (started) return { status: "unknown", reason: "transfer_binding_unproven", page_observed: result.includes("left_list_observed") ? "left_list" : "unknown" };
       const detail = result.startsWith("not_executed:") ? result.slice("not_executed:".length) : "not_started";
-      const reason = detail.startsWith("transfer_") || detail.startsWith("conv_state_") ? detail : "transfer_" + detail;
+      const reason = detail.startsWith("transfer_") || detail.startsWith("conv_state_") || detail.startsWith("pdd_") ? detail : "transfer_" + detail;
       console.log(`[${this.shopId}] transfer not_started reason=${reason}`);
       return { status: "not_sent", reason };
     } catch {
@@ -2943,6 +2977,9 @@ export class PddPageAdapter implements PlatformAdapter {
     let opened = false;
     let popoverMaybe = false;
     try {
+      // 和发文字、标星一样先切到该买家的会话；在页面互斥（sending）之内进行，期间不会有自动点开其他会话或预热。
+      const notOpened = hooks ? await hooks.open() : null;
+      if (notOpened) return `not_executed:${notOpened}`;
       let blocked = await gate();
       if (blocked) return `not_executed:${blocked}`;
       const scan = hooks ? await read<Scan>(SCAN).catch(() => null) : await this.scanKeepingFresh();
@@ -2972,16 +3009,30 @@ export class PddPageAdapter implements PlatformAdapter {
       blocked = await gate();
       if (blocked) return `not_executed:${blocked}`;
       // 打开对话框：not_sent 保持原样；unknown 表示按下命令已发出、可能已经生效，不补点，记一条结果后按页面观察继续。
+      this.csList = { state: "waiting", id: null };
+      const clickedAt = Date.now();
       const openClick = await clickPage(open);
       if (openClick.status === "not_sent") return "not_executed:open_click_failed";
       opened = true;
       if (openClick.status === "unknown") log({ phase: "open_click", result: "unknown", reason: openClick.reason });
       let rows: TransferRow[] | string = "dialog_missing";
-      for (let i = 0; i < 10 && Date.now() < exp && (typeof rows === "string" || !rows.length); i++) {
+      // 名单请求还在路上就多等一会儿；名单为空或请求失败时平台不会弹出对话框，直接给出原因。
+      const listState = () => this.csList?.state ?? "waiting";
+      const waitMore = () => Date.now() - clickedAt < (listState() === "requested" || listState() === "ready" ? TRANSFER_DIALOG_LIST_WAIT_MS : TRANSFER_DIALOG_WAIT_MS);
+      while (Date.now() < exp && (typeof rows === "string" || !rows.length) && waitMore()) {
+        if (listState() === "empty") return "not_executed:no_assignable_cs";
+        if (listState() === "failed") return "not_executed:cs_list_failed";
         await sleep(300);
         rows = await read<TransferRow[] | string>(hooks ? FORMAL_TRANSFER_ROWS : TRANSFER_ROWS).catch(() => "script_failed");
       }
       if (Date.now() >= exp) return "not_executed:expired";
+      if (rows === "dialog_missing") {
+        const state = listState();
+        if (state === "empty") return "not_executed:no_assignable_cs";
+        if (state === "failed") return "not_executed:cs_list_failed";
+        if (state === "waiting") return "not_executed:open_not_triggered";
+        if (state === "requested") return "not_executed:cs_list_timeout";
+      }
       if (typeof rows === "string") return `not_executed:${rows}`;
       // 只认第一列（客服名）与用户指定名称完全相同；备注、状态等其他列命中不算。
       const matches = rows.filter((r) => r.cells[0] === target);
@@ -3065,6 +3116,7 @@ export class PddPageAdapter implements PlatformAdapter {
         }
       } finally {
         this.sending = false;
+        this.csList = null;
       }
     }
   }

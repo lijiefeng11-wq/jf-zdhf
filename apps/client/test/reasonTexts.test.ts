@@ -19,6 +19,7 @@ const CODES = [
   "image_too_large", "image_type_unsupported", "command_timeout", "command_exception", "command_rejected",
   "invalid_point", "contents_destroyed", "preflight_failed", "debugger_not_attached", "recheck_failed",
   "before_press_failed", "target_moved", "page_state_not_confirmed", "lease_response_mismatch",
+  "transfer_no_assignable_cs", "transfer_cs_list_failed", "transfer_cs_list_timeout", "transfer_open_not_triggered", "transfer_conversation_mismatch",
 ] as const;
 
 test("平台页面操作与回执的原因代码都有中文说明", () => {
