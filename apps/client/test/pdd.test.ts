@@ -14,7 +14,7 @@ const realtime = (mallId: number | string = Number(MALL)) => ({ mall_id: mallId,
 const csInfo = (mallId: string = MALL) => ({ success: true, result: { mallInfoResult: { mallId: Number(mallId), mallName: "虚构测试店" } } });
 const listRequest = (buyer = BUYER) => ({ data: { cmd: "list", list: { with: { role: "user", id: buyer }, start_msg_id: null, start_index: 0, size: 20 } }, client: "WEB" });
 
-type Msg = { id: string; from: "user" | "mall_cs"; ts: number | string; type?: number; content?: string; template_name?: string; info?: Record<string, unknown> };
+type Msg = { id: string; from: "user" | "mall_cs"; ts: number | string; type?: number; content?: string; template_name?: string; info?: Record<string, unknown>; biz_context?: Record<string, unknown> };
 function listResponse(msgs: Msg[], hasMore = false, buyer = BUYER) {
   return {
     success: true,
@@ -29,6 +29,7 @@ function listResponse(msgs: Msg[], hasMore = false, buyer = BUYER) {
         msg_id: m.id,
         ...(m.template_name ? { template_name: m.template_name } : {}),
         ...(m.info ? { info: m.info } : {}),
+        ...(m.biz_context ? { biz_context: m.biz_context } : {}),
       })),
     },
   };
@@ -123,6 +124,25 @@ describe("拼多多响应解析", () => {
       ["card", "商品卡片", { type: "goods" }],
       ["card", "平台系统提示卡片", { type: "system", title: "平台系统提示卡片" }],
       ["card", "平台来源卡片", { type: "source", title: "平台来源卡片" }],
+    ]);
+  });
+
+  test("对话：订单备注确认卡片（type 48）读出备注内容，按买家订单卡片提交", () => {
+    const info = { template_list: [{ template: "title", element: { text: "请确认消费者订单备注" } }, { template: "double_text", element: { left: "备注内容:", right: "虚构车型" } }] };
+    const parsed = parseChatList(
+      listRequest(),
+      listResponse([
+        { id: "3000000000001", from: "user", ts: NOW - 2, type: 48, template_name: "order_remarks_apply_card", content: "[请确认消费者订单备注]", info, biz_context: { orderSn: "000000-000000000000001", remarks: " 23年 虚构车型 " } },
+        { id: "3000000000002", from: "user", ts: NOW - 1, type: 48, template_name: "order_remarks_apply_card", content: "[请确认消费者订单备注]", info, biz_context: { remarks: "https://example.invalid/x" } },
+        { id: "3000000000003", from: "user", ts: NOW, type: 48, template_name: "other_card", content: "[其他]", info },
+        { id: "3000000000004", from: "user", ts: NOW, type: 48, template_name: "order_remarks_apply_card", content: "[请确认消费者订单备注]", info, biz_context: { remarks: "虚构车型 电话13800000000 地址：虚构市虚构路1号" } },
+      ]),
+    );
+    assert.deepEqual(parsed?.messages.map((m) => [m.role, m.kind, m.content, m.card]), [
+      ["buyer", "card", "请确认消费者订单备注：备注内容 23年 虚构车型", { type: "order", title: "请确认消费者订单备注", fields: [{ label: "备注内容", value: "23年 虚构车型" }] }],
+      ["buyer", "card", "请确认消费者订单备注：备注内容 （未读到）", { type: "order", title: "请确认消费者订单备注" }],
+      ["buyer", "unsupported", "非文字消息（类型 48）", undefined],
+      ["buyer", "card", "请确认消费者订单备注：备注内容 虚构车型 电话[已隐去] 地址：[已隐去]", { type: "order", title: "请确认消费者订单备注", fields: [{ label: "备注内容", value: "虚构车型 电话[已隐去] 地址：[已隐去]" }] }],
     ]);
   });
 

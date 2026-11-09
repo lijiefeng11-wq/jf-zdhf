@@ -82,6 +82,21 @@ class MultimodalTests(unittest.TestCase):
         self.assertEqual(result["reason"], "image_missing")
         post.assert_not_called()
 
+    def test_order_remark_card_is_acknowledged_without_the_model(self):
+        card = {"type": "order", "title": "请确认消费者订单备注", "fields": [{"label": "备注内容", "value": "23年虚构车型"}]}
+        latest = message("card", content="请确认消费者订单备注：备注内容 23年虚构车型", card=card)
+        validate_content([latest], require)
+        for mode in ("hybrid", "rules", "model"):
+            with self.subTest(mode=mode), patch("backend.engine._post") as post:
+                result = decide(job([message(name="old"), latest], mode), CONFIG)
+                self.assertEqual((result["action"], result["reason"], result["text"]), ("reply", "order_remark_card", "嗯嗯 已记录"))
+                post.assert_not_called()
+        # No remark read, or another order card: the usual path.
+        for other in ({**card, "fields": []}, {**card, "title": "订单卡片"}):
+            with self.subTest(card=other), patch("backend.engine._post", return_value=completion()) as post:
+                self.assertNotEqual(decide(job([message("card", card=other)], "hybrid"), CONFIG)["reason"], "order_remark_card")
+                post.assert_called_once()
+
     def test_delayed_message_and_rules_miss_model_fallback(self):
         item = job([message(content="商品规格", created_at=time.time()-3600)], "hybrid")
         item["payload"]["received_at"] -= 3600
