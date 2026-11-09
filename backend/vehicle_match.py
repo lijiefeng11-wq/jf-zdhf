@@ -746,7 +746,8 @@ AFFIRM = re.compile(r"(?:是|是的|对|对的|嗯|嗯嗯|没错|就是|就是�
 # Words around a bare year / seats / generation in a short answer to a vehicle question ("18款的", "是7座").
 FOLLOW_UP_FILLER = re.compile(r"我的是|我的|我家的|就是|请问|您好|你好|谢谢|好的|在吗|在么|能用吗|能装吗|可以吗|可以用吗|"
                               r"年份|年款|款式|的|是|呢|吗|款|年|版|车|哦|啊|呀|哈|嗯|对|亲|那|三厢|两厢")
-GREETING = re.compile(r"在吗|在么|在嘛|在不在|在的|人呢|有人吗|老板|客服|你好|您好|哈喽|hello|hi|嗯|哦|好的|谢谢|麻烦|请问")
+# "在" is in no car name of the table, so "在呢", "在线吗", "还在不" and a lone "在" are greetings too.
+GREETING = re.compile(r"在不在|在线|还在|有人|在|人呢|老板|客服|你好|您好|哈喽|嗨|hello|hi|嗯|哦|好的|谢谢|麻烦|请问")
 # Order, shipping, remark and link talk ("下单了", "尽快发货", "快点", "还要备注吗", "好的发我"): never part of a car name, so a
 # message made only of it does not name a car, even after an earlier car the table lacks.
 SHOP_TALK = re.compile(r"已经|下单|拍下|拍好|拍了|付款|付了|买好|买了|尽快|赶紧|快点|快些|加急|发货|发出|发走|到货|"
