@@ -39,7 +39,7 @@ function html(s) {
       <div class="reply-footer"${s.gpt ? ' style="display:none"' : ""}>${s.hiddenDuplicate ? '<div class="send-btn" style="display:none"></div>' : ""}
       ${s.insertDelay ? "" : button}${s.ambiguous ? button : ""}</div>${gpt}</div>
     ${s.mask ? '<div style="position:fixed;inset:0;background:#fff;z-index:10"></div>' : ""}
-    ${s.overlay ? '<div class="fullscreen-dialog-manager"><div class="el-dialog__wrapper full-screen-dialog-basic" tabindex="0" style="position:fixed;inset:0;background:#fff;z-index:10">' + (s.overlayContent ? '<div class="business-dialog" style="position:absolute;inset:0"></div>' : '') + '</div></div>' : ''}
+    ${s.overlay ? '<div class="fullscreen-dialog-manager"><div class="el-dialog__wrapper full-screen-dialog-basic" tabindex="0" style="position:fixed;inset:0;background:#fff;z-index:10">' + (s.overlayContent ? '<div class="business-dialog" style="position:absolute;' + (s.centeredContent ? 'left:300px;top:250px;width:300px;height:160px;' : 'inset:0;') + (s.hiddenContent ? 'display:none;' : '') + '">虚构业务弹窗</div>' : '') + '</div></div>' : ''}
     <div id="messages"><div class="buyer-message" data-uid="9001">虚构买家提问</div></div>
     <script>
     window.clicks=0;window.enters=[];window.sendErrors=[];
@@ -129,6 +129,9 @@ app.whenReady().then(async () => {
     { name: "zoom80", zoom: 0.8, status: "confirmed" },
     { name: "fully_covered", mask: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
     { name: "fullscreen_business_modal_content_is_not_bypassed", overlay: true, overlayContent: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
+    { name: "fullscreen_centered_business_content_is_not_bypassed", overlay: true, overlayContent: true, centeredContent: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
+    { name: "fullscreen_hidden_business_content_allows_enter", overlay: true, overlayContent: true, hiddenContent: true, status: "confirmed" },
+    { name: "fullscreen_business_content_appears_at_key_guard", overlay: true, atKey: "business", status: "not_sent", reason: "pdd_send_button_covered" },
     { name: "two_visible_buttons_are_ambiguous", ambiguous: true, status: "not_sent", reason: "pdd_send_control_unverified" },
     { name: "different_conversation", otherBuyer: true, status: "not_sent", reason: "pdd_conversation_changed" },
     { name: "human_draft_changed", changeDraft: true, status: "not_sent", reason: "pdd_input_mismatch" },
@@ -168,6 +171,7 @@ app.whenReady().then(async () => {
           if (s.atKey === 'page') adapter.watchEpoch++;
           if (s.atKey === 'hidden') await wc.executeJavaScript('document.querySelector("#composer .send-btn").style.visibility="hidden"');
           if (s.atKey === 'disabled') await wc.executeJavaScript('document.querySelector("#composer .send-btn").setAttribute("aria-disabled","true")');
+          if (s.atKey === 'business') await wc.executeJavaScript('document.querySelector(".full-screen-dialog-basic").insertAdjacentHTML("beforeend",\'<div style="position:absolute;left:300px;top:250px;width:300px;height:160px">虚构业务弹窗</div>\')');
           if (s.atKey === 'deadline') await sleep(Math.max(0, deadline * 1000 - 1500 - Date.now() + 20));
         }
         if (['mousePressed', 'mouseReleased', 'keyDown', 'rawKeyDown', 'keyUp', 'char'].includes(params.type)) commands.push(params.type);

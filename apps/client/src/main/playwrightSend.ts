@@ -136,11 +136,17 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
         const left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
         const top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
         if (right - left < 4 || bottom - top < 4) return false;
+        const wrappers = new Set<Element>();
         for (const fy of [0.5, 0.25, 0.75]) for (const fx of [0.5, 0.25, 0.75]) {
           const hit = document.elementFromPoint(left + (right - left) * fx, top + (bottom - top) * fy);
           if (!hit?.matches(".fullscreen-dialog-manager .el-dialog__wrapper.full-screen-dialog-basic")) return false;
+          wrappers.add(hit);
         }
-        return true;
+        // 居中业务弹窗不一定覆盖按钮；外层任意位置有可见子内容时也不能旁路。
+        return [...wrappers].every(wrapper => ![...wrapper.querySelectorAll("*")].some(child => {
+          const rect = child.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight && getComputedStyle(child).visibility === "visible";
+        }));
       });
       if (!covered) {
         step = "scroll";
@@ -160,6 +166,11 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
           if (!target) return "pdd_send_control_unverified";
           const rect = target.getBoundingClientRect();
           if (rect.width < 4 || rect.height < 4 || getComputedStyle(target).visibility !== "visible" || target.matches(":disabled, [aria-disabled=true]")) return "pdd_send_control_unverified";
+          const wrapper = document.elementFromPoint((Math.max(0, rect.left) + Math.min(innerWidth, rect.right)) / 2, (Math.max(0, rect.top) + Math.min(innerHeight, rect.bottom)) / 2);
+          if (!wrapper?.matches(".fullscreen-dialog-manager .el-dialog__wrapper.full-screen-dialog-basic") || [...wrapper.querySelectorAll("*")].some(child => {
+            const r = child.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight && getComputedStyle(child).visibility === "visible";
+          })) return "pdd_send_button_covered";
         }
         return target?.closest("div.reply-box") === ta.closest("div.reply-box") && !target.classList.contains("sendBtn_disabled") && new RegExp(args.label).test(label ?? "") ? null : "pdd_send_control_unverified";
       }, { uid, text, key: `${nonce}-${selection.candidate}`, until: deadline * 1000 - 1500, label: SEND_LABEL, enter: covered });
