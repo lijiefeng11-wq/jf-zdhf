@@ -554,10 +554,14 @@ class Store:
             self._switch_timeout(row, clock)
 
     def _expire_deadlines(self):
-        for key in list(self._clocks):
-            row = self.db.execute("SELECT * FROM events WHERE shop_id=? AND event_id=?", key).fetchone()
-            if row:
-                self._expire_deadline(row)
+        now = time.monotonic()
+        for key, clock in list(self._clocks.items()):
+            total_due = clock.get("deadline") is not None and now >= clock["deadline"]
+            reply_due = clock.get("reply_deadline") is not None and not clock.get("timeout_switched") and now >= clock["reply_deadline"]
+            if total_due or reply_due:
+                row = self.db.execute("SELECT * FROM events WHERE shop_id=? AND event_id=?", key).fetchone()
+                if row:
+                    self._expire_deadline(row)
 
     def expire_deadlines(self):
         with self.lock, self.db:
