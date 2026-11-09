@@ -2070,7 +2070,8 @@ export class PddPageAdapter implements PlatformAdapter {
         }
         return click;
       }
-      // 第二阶段：已点发送；此后除平台确认外一律不确定。
+      if (click.via === "enter") console.log(`[${this.shopId}] platform send via enter: send button covered by fullscreen dialog`);
+      // 第二阶段：已尝试发送；此后除平台确认外一律不确定。
       const r = await Promise.race([result, sleep(Math.max(500, Math.min(8000, left() * 1000))).then(() => null)]);
       const out = this.outgoing as { matched: string | null; blocked: number } | null;
       this.outgoing = null;
