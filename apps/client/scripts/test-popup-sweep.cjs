@@ -29,6 +29,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
 async function pageWith(win) {
   await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(HTML));
   const wc = win.webContents;
+  // 页面仍标记为加载中时清理直接返回 null（不建立互斥）：慢机器上 loadURL 返回后可能还要等一会儿。
+  for (const end = Date.now() + 5000; wc.isLoadingMainFrame() && Date.now() < end;) await sleep(20);
   const page = { webContents: wc, isDestroyed: () => win.isDestroyed() || wc.isDestroyed(), loadURL: (u) => wc.loadURL(u), close: () => win.destroy(), on: () => undefined };
   const adapter = new PddPageAdapter("fixture", "虚构店铺", null, () => page);
   adapter.window = page;
@@ -83,11 +85,12 @@ app.whenReady().then(async () => {
       busy(wc, 20_000);
       await sleep(100);
       adapter.sweepPopupsOnce(page, "auto");
+      const began = adapter.popupSweep !== null;
       const started = Date.now();
       setTimeout(() => wc.forcefullyCrashRenderer(), 300);
       await adapter.yieldWarm();
       const waited = Date.now() - started;
-      check("清理期间渲染进程退出：过了点击时限才解除互斥", waited >= POPUP_SWEEP_START_MS && waited < POPUP_SWEEP_START_MS + 3000 && adapter.popupSweep === null, { waited });
+      check("清理期间渲染进程退出：过了点击时限才解除互斥", began && waited >= POPUP_SWEEP_START_MS && waited < POPUP_SWEEP_START_MS + 3000 && adapter.popupSweep === null, { began, waited, loading: wc.isDestroyed() ? null : wc.isLoadingMainFrame() });
     }
     win.destroy();
   } catch (err) {
