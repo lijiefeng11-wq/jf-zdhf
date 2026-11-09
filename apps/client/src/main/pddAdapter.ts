@@ -2410,12 +2410,16 @@ export class PddPageAdapter implements PlatformAdapter {
     this.goodsTabAt.set(conversationId, Date.now());
     const since = Date.now();
     const result = await this.run<string>(goodsTabScript(conversationId)).catch(() => "error");
+    // 页签已选中时，页面刚为这个买家打开对话、推荐商品列表可能还在加载：没读到过就同样等它，
+    // 否则列表在提交后才到，候选变化使刚做好的判断失效。
+    const waits = result === "clicked" || (result === "already" && !this.goodsRows.has(conversationId));
+    const rowsSince = result === "clicked" ? since : 0;
     let loaded = false;
-    for (let i = 0; result === "clicked" && !loaded && Date.now() - since < timeoutMs && !aborted(); i++) {
+    for (let i = 0; waits && !loaded && Date.now() - since < timeoutMs && !aborted(); i++) {
       await sleep(100);
-      loaded = (this.goodsRows.get(conversationId)?.at ?? 0) >= since;
+      loaded = (this.goodsRows.get(conversationId)?.at ?? -1) >= rowsSince;
     }
-    console.log(`[${this.shopId}] platform goods tab result=${result}${result === "clicked" ? ` loaded=${loaded}` : ""}`);
+    console.log(`[${this.shopId}] platform goods tab result=${result}${waits ? ` loaded=${loaded}` : ""}`);
   }
 
   /**
