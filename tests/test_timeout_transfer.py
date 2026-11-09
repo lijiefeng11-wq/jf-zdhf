@@ -66,6 +66,36 @@ class TimeoutTransferTests(StoreTestCase):
         self.assertLessEqual(snap["delivery"]["claim_expires_at"], self.clock.wall + 10)
         self.assert_code("timeout_transfer_not_allowed", lambda: self.switch(attempt_id="other"))
 
+    def test_selected_claim_cannot_renew_after_authorization_changes(self):
+        for change, expected in (("disabled", "settings_changed"), ("policy", "settings_changed"),
+                                 ("latest", "superseded"), ("capability", "capability_not_confirmed")):
+            with self.subTest(change=change):
+                settings = self.store._settings("a")
+                settings.pop("version")
+                settings["enabled"] = True
+                self.store.update_settings("a", settings)
+                self.heartbeat(("reply_deadline", "reply_timeout_transfer", "transfer_by_account"))
+                name = "evt-" + change
+                self.event(name=name, conversation=name)
+                self.clock.sleep(45)
+                before = self.store.claim(self.identity, name, self.claim_body())["delivery"]
+                self.clock.sleep(1)
+                if change in ("disabled", "policy"):
+                    settings = self.store._settings("a")
+                    settings.pop("version")
+                    if change == "disabled":
+                        settings["enabled"] = False
+                    else:
+                        settings["fallback"]["model_timeout"]["account"] = "fictional-other"
+                    self.store.update_settings("a", settings)
+                elif change == "latest":
+                    self.event(name="newer", conversation=name, revision=2)
+                else:
+                    self.heartbeat(("reply_deadline", "reply_timeout_transfer"))
+                body = {**self.claim_body(), "remaining_budget_ms": 14000}
+                self.assert_code(expected, lambda: self.store.timeout_transfer(self.identity, name, body))
+                self.assertEqual(self.store.get(self.identity, name)["delivery"], before)
+
     def test_unknown_never_switches(self):
         self.event()
         job = self.store.next_job()

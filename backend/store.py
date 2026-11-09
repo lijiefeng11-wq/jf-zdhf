@@ -897,6 +897,11 @@ class Store:
             d = json.loads(row["delivery"])
             claimed = d["status"] == "claimed" and d["attempt_id"] == p.get("attempt_id")
             require(claimed or ("attempt_id" not in p and self._cancellable(row)), "timeout_transfer_not_allowed", 409)
+            require(self._is_latest(row), "superseded", 409)
+            settings = self._settings(row["shop_id"])
+            require(settings["enabled"] and settings["version"] == row["settings_version"], "settings_changed", 409)
+            if json.loads(row["decision"] or "{}").get("action") == "transfer":
+                require(conversation_actions.TRANSFER_CAPABILITY in lease.get("capabilities", []), "capability_not_confirmed", 409)
             clock = self._clocks.get((row["shop_id"], event))
             require(clock and clock.get("deadline") is not None, deadlines.REASON, 409)
             clock["deadline"] = min(clock["deadline"], time.monotonic() + p["remaining_budget_ms"] / 1000)
