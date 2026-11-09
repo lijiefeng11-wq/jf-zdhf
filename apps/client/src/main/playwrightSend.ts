@@ -3,7 +3,7 @@ import type { WebContents } from "electron";
 import { errors } from "playwright-core";
 import { connectExistingPage } from "./electronPlaywright.js";
 import { selectSendControl } from "./scraplingSelector.js";
-import type { PageClickResult } from "./pddClick.js";
+import { dispatchPageClick, type PageClickResult } from "./pddClick.js";
 
 /**
  * 平台发送按钮的文字。平台给出“推荐话术”时同一个按钮显示“坚持发送”，点下去仍发送输入框里的原文。
@@ -40,7 +40,7 @@ const SAFE_ERRORS = new Set(["playwright_page_unavailable", "selector_unavailabl
 export async function clickSendWithPlaywright(wc: WebContents, uid: string, text: string, deadline: number, current: () => string | null,
   clicked: (pressed: boolean) => void, filled: () => void, diagnose: (detail: string) => void = () => undefined): Promise<PageClickResult> {
   let step = "connect";
-  let pressed = false, released = false, active = true;
+  let pressed = false, active = true;
   let connection: Awaited<ReturnType<typeof connectExistingPage>> | null = null;
   let refusal: string | null = null;
   let verifyAtPress: () => Promise<string | null> = async () => "pdd_send_control_unverified";
@@ -62,19 +62,8 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
   try {
     const initial = blocked(); if (initial) return stop(initial);
     const operation = async (): Promise<PageClickResult> => {
-      connection = await connectExistingPage(wc, async type => {
-        const block = blocked(); if (block) return block;
-        if (type === "mousePressed") {
-          if (pressed) return "already_attempted";
-          refusal = await verifyAtPress();
-          const fresh = blocked(); if (fresh) return fresh;
-          pressed = true; clicked(true);
-        } else if (type === "mouseReleased") {
-          if (!pressed || released) return "already_attempted";
-          released = true;
-        }
-        return null;
-      });
+      // Playwright 只做 DOM 定位；可信输入由已有的单次 CDP 点击器执行。
+      connection = await connectExistingPage(wc, () => "pdd_send_control_unverified");
       const connectedBlock = blocked();
       if (connectedBlock) { connection.close(); return stop(connectedBlock); }
       const page = connection.page;
@@ -184,7 +173,7 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
         sweep();
       })()` }]);
       step = "scroll";
-      await button.scrollIntoViewIfNeeded({ timeout: left() });
+      await button.evaluate(el => el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" }));
       const before = blocked(); if (before) return stop(before);
       verifyAtPress = async () => {
         await wc.executeJavaScriptInIsolatedWorld(1001, [{ code: sweepSurface }]);
@@ -220,11 +209,12 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
         return null;
       });
       if (!clickPoint) return stop("pdd_send_control_unverified");
-      // 遮挡处理后直接在已命中的视口坐标发送可信输入，避免元素 actionability 在缩放后停住。
-      // transport 在按下前再次核对坐标命中、同一买家与原文，整个过程只允许一次按下。
+      // 不等待元素稳定或 Playwright 鼠标准备；直接复用有界、单次的原生 CDP 点击。
+      // 按下前再次核对坐标命中、同一买家与原文，按下异常后绝不重试。
       step = "click";
-      await page.mouse.click(clickPoint.x, clickPoint.y);
-      return { status: "dispatched" };
+      refusal = await verifyAtPress();
+      const result = await dispatchPageClick(wc, clickPoint, blocked, () => { pressed = true; clicked(true); });
+      return result.status === "unknown" ? stop("pdd_playwright_click_uncertain") : result;
     };
     return await Promise.race([operation(), new Promise<PageClickResult>(resolve => {
       timer = setTimeout(() => { active = false; connection?.close(); resolve(stop("claim_expiring")); }, Math.max(1, deadline * 1000 - Date.now() - 1000));

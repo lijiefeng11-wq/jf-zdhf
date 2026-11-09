@@ -134,6 +134,8 @@ app.whenReady().then(async () => {
     { name: "zoom80", zoom: 0.8, status: "confirmed" },
     ...Array.from({ length: 8 }, (_, i) => ({ name: `zoom_transition_mask_${i}`, zoom: i % 2 ? 1 : 0.8, mask: true, status: "confirmed" })),
     { name: "cdp_box_unavailable_uses_verified_dom_hit", overlay: true, noBoxModel: true, status: "confirmed" },
+    { name: "cdp_scroll_unavailable_uses_dom_scroll", mask: true, noScroll: true, css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
+    { name: "playwright_input_unavailable_uses_native_click", overlay: true, noSessionInput: true, status: "confirmed" },
     { name: "button_moves_off_verified_point_at_press", overlay: true, atPress: "move", status: "not_sent", reason: "pdd_send_control_unverified" },
     { name: "button_loses_pointer_hit_at_press", overlay: true, atPress: "pointer", status: "not_sent", reason: "pdd_send_control_unverified" },
     { name: "fully_covered_trusted_click", mask: true, status: "confirmed" },
@@ -178,11 +180,13 @@ app.whenReady().then(async () => {
       const deadline = Date.now() / 1000 + (s.shortDeadline ? 1.7 : s.atPress === 'deadline' ? 3 : 10);
       wc.debugger.sendCommand = async (method, params = {}, sessionId) => {
         if (method === 'DOM.getBoxModel' && s.noBoxModel) throw new Error('fixture_box_model_unavailable');
-        if (params.type === "mouseMoved" && s.switchBeforePress) await wc.executeJavaScript('document.querySelector(".chat-item-box").setAttribute("data-random","9002-fixture")');
-        if (params.type === "mouseMoved" && s.draftBeforePress) await wc.executeJavaScript('document.querySelector("textarea").value="人工草稿"');
-        // 第二次原文核验来自 transport 的 mousePressed guard。
+        if (method === 'DOM.scrollIntoViewIfNeeded' && s.noScroll) throw new Error('fixture_scroll_unavailable');
+        if (method.startsWith('Input.') && sessionId && s.noSessionInput) throw new Error('fixture_session_input_unavailable');
+        // 第二次原文核验紧邻原生 mousePressed，故障必须在核验执行前注入。
         if (method === 'Runtime.callFunctionOn' && JSON.stringify(params).includes('args.key') && ++verifications === 2) {
           pressBoundary = true;
+          if (s.switchBeforePress) await wc.executeJavaScript('document.querySelector(".chat-item-box").setAttribute("data-random","9002-fixture")');
+          if (s.draftBeforePress) await wc.executeJavaScript('document.querySelector("textarea").value="人工草稿"');
           if (s.atPress === 'uid') await wc.executeJavaScript('document.querySelector(".chat-item-box").dataset.random="9002-fixture"');
           if (s.atPress === 'draft') await wc.executeJavaScript('document.querySelector("textarea").value="人工草稿"');
           if (s.atPress === 'focus') await wc.executeJavaScript('document.querySelector("#messages").tabIndex=0;document.querySelector("#messages").focus()');
@@ -209,7 +213,7 @@ app.whenReady().then(async () => {
           return nativeCommand('Fetch.fulfillRequest', { requestId: params.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }], body: Buffer.from(JSON.stringify(response)).toString('base64') }, sessionId);
         }
         const result = await nativeCommand(method, params, sessionId);
-        if (s.pageChanged && method === "DOM.scrollIntoViewIfNeeded") adapter.watchEpoch++;
+        if (s.pageChanged && method === 'Runtime.callFunctionOn' && JSON.stringify(params).includes('el.scrollIntoView')) adapter.watchEpoch++;
         return result;
       };
       adapter.window = { isDestroyed: () => win.isDestroyed(), webContents: wc };
