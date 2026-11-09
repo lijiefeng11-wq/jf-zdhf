@@ -569,6 +569,13 @@ unknown 表示前台无法确认平台是否发出。管理员可到平台聊天
   - 备份为本机后台 SQLite 的每日一致性快照，保留最近 7 份，POSIX 目录 0700 / 文件 0600；不包含独立认证库、密钥或客户端资料，不等于完整部署回退。仅在独立实现部署后生效；不授权恢复、重启或平台动作。
   - unknown 数量包括已经人工核查但仍保留原 unknown 状态的历史；提醒不改写、不清除、不重试这些记录。建议回复的展示也不赋予 claim / 发送权限，前台“仅观察”与“人工接管”的发送阻止保持。
 - `GET /api/v1/admin/shops`：`{"shops":[{"shop_id":"demo-shop","name":"演示店铺","settings":{...},"lease":null或租约}],"templates":[话术模板...]}`。旧后台可不返回 `templates`。
+  - 每家店铺可增量返回 `decision_runtime`，仅供管理员查看后台当前生效的决策配置；旧后台可省略，管理页遇到缺失或刷新失败须显示“状态未确认”，不可推断为已启用。旧管理调用方可忽略此字段，客户端事件 / claim / receipt 及协议版本 1.0 不变。
+  - 结构示例：`{"brain_configured":true,"mode":"conversation_brain","enabled":true,"persistent_memory":true,"total_budget_seconds":20,"models":[{"slot":"backup","model":"example-cloud","configured":true,"timeout_seconds":15},{"slot":"primary","model":"example-local","configured":true,"timeout_seconds":15}]}`。
+  - `brain_configured` 表示店铺在服务端 `conversation_brain` 启用范围内；`mode` 为 `rules|conversation_brain|legacy`：纯规则设置优先，其次是已配置新模式，其余为传统模型流程。`enabled` 是已保存的店铺判断开关；为 false 时暂停判断，其他字段仍说明恢复后采用的配置，不代表正在调用模型。
+  - `models` 按尝试顺序排列，元素的 `slot` 为 `primary|backup`，`model` 为已保存模型名称（可为空），`configured` 表示该槽位具备有效连接配置，不表示连接已测试成功。纯规则返回空数组；传统流程主槽优先；新模式按服务端 `brain_primary_slot` 排序。未配置的槽位跳过，故障后只在剩余预算允许时尝试下一槽位。
+  - `timeout_seconds` 是有效的单次请求超时：新模式可由服务端 `brain_request_timeout_seconds` 覆盖，否则采用已保存槽位值。`total_budget_seconds` 在新模式为 20，其他流程为 null；客户端剩余预算更少时提前截止，并非给每个模型单独分配 20 秒。
+  - `persistent_memory` 表示该流程具有带买家原文来源的持久记忆能力；新模式为 true，纯规则及传统流程为 false，暂停时不更新。摘要不包含记忆正文；记忆不等于订单事实已核实或平台发送成功。
+  - 此字段与管理接口保持相同鉴权：未登录 401、客户端令牌 403、首次密码未修改的管理员 403。仅返回以上配置摘要，不返回 API 密钥、接口地址、买家聊天或记忆正文。管理页应使用文本渲染；未保存表单不影响摘要，摘要不代表客户端已获自动发送授权，也不提供启用范围或超时的写入接口。
 - `POST /api/v1/admin/reply-templates`：将当前话术另存为独立模板，详见下文“共用话术模板”；不绑定店铺、不开启自动回复。
 - `GET /api/v1/admin/events?shop_id=demo-shop&limit=50`：`{"events":[事件快照...]}`；limit 1–200，不传店铺查全部。
 - `POST /api/v1/admin/prompt-draft`：根据管理员本次输入生成未应用的提示词草稿，详见下方“管理员提示词草稿”约定；不写入店铺设置。
