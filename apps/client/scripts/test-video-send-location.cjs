@@ -185,7 +185,8 @@ app.whenReady().then(async () => {
     wc.debugger.sendCommand = nativeCommand;
     if (wc.debugger.isAttached()) wc.debugger.detach();
     win.destroy();
-    await new Promise(resolve => proxy.close(resolve));
+    // 最后一个窗口销毁后不再 await，避免 Linux 默认退出抢先于最终结果输出。
+    proxy.close();
     clearTimeout(watchdog);
   }
   console.log(JSON.stringify({ ok: results.length === scenarios.length && results.every(r => r.ok), results }));
