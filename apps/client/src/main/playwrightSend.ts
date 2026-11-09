@@ -44,10 +44,12 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
   let connection: Awaited<ReturnType<typeof connectExistingPage>> | null = null;
   let refusal: string | null = null;
   let verifyAtPress: () => Promise<string | null> = async () => "pdd_send_control_unverified";
+  let clickPoint: { x: number; y: number } | null = null;
   const disconnect = () => connection?.close();
   const nonce = randomUUID();
   const surfaceKey = `claw-send-surface-${nonce}`;
-  const restoreSurface = `globalThis[${JSON.stringify(surfaceKey)}]?.()`;
+  const restoreSurface = `globalThis[${JSON.stringify(surfaceKey)}]?.restore()`;
+  const sweepSurface = `globalThis[${JSON.stringify(surfaceKey)}]?.sweep()`;
   let deadlineBounded = false;
   const left = () => {
     const remaining = deadline * 1000 - Date.now() - 1500;
@@ -151,7 +153,6 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
           for (const [el, value] of inert) if (!el.hasAttribute('inert')) el.setAttribute('inert', value);
           delete globalThis[${JSON.stringify(surfaceKey)}];
         };
-        globalThis[${JSON.stringify(surfaceKey)}] = restore;
         const hide = el => {
           if (!el || el.contains(target) || (input && el.contains(input))) return;
           if (!displays.has(el)) displays.set(el, [el.style.getPropertyValue('display'), el.style.getPropertyPriority('display')]);
@@ -174,6 +175,7 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
             if (hit && hit !== target && !target.contains(hit)) hide(hit);
           }
         };
+        globalThis[${JSON.stringify(surfaceKey)}] = { restore, sweep };
         observer = new MutationObserver(sweep);
         observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'inert'] });
         document.addEventListener('scroll', sweep, true);
@@ -184,35 +186,44 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
       step = "scroll";
       await button.scrollIntoViewIfNeeded({ timeout: left() });
       const before = blocked(); if (before) return stop(before);
-      verifyAtPress = () => input.evaluate((ta, args) => {
-        const keys = [...document.querySelectorAll("li.chat-item .chat-item-box.active[data-random]")].map(e => /^([0-9]{1,32})-/.exec(e.getAttribute("data-random") ?? "")?.[1]);
-        const target = document.querySelector<HTMLElement>(`[data-claw-send-key="${args.key}"]`);
-        const label = target?.innerText?.replace(/\s+/g, "");
-        if (!keys.length || !keys.every(k => k === args.uid)) return "pdd_conversation_changed";
-        if (Date.now() >= args.until) return "claim_expiring";
-        if ((ta as HTMLTextAreaElement).disabled || (ta as HTMLTextAreaElement).readOnly) return "pdd_input_missing";
-        if ((ta as HTMLTextAreaElement).value !== args.text) return "pdd_input_mismatch";
-        if (!target) return "pdd_send_control_unverified";
-        const rect = target.getBoundingClientRect();
-        if (rect.width < 4 || rect.height < 4 || getComputedStyle(target).visibility !== "visible" || target.matches(":disabled, [aria-disabled=true]")) return "pdd_send_control_unverified";
-        return target.closest("div.reply-box") === ta.closest("div.reply-box") && !target.classList.contains("sendBtn_disabled") && new RegExp(args.label).test(label ?? "") ? null : "pdd_send_control_unverified";
-      }, { uid, text, key: `${nonce}-${selection.candidate}`, until: deadline * 1000 - 1500, label: SEND_LABEL });
+      verifyAtPress = async () => {
+        await wc.executeJavaScriptInIsolatedWorld(1001, [{ code: sweepSurface }]);
+        return input.evaluate((ta, args) => {
+          const keys = [...document.querySelectorAll("li.chat-item .chat-item-box.active[data-random]")].map(e => /^([0-9]{1,32})-/.exec(e.getAttribute("data-random") ?? "")?.[1]);
+          const target = document.querySelector<HTMLElement>(`[data-claw-send-key="${args.key}"]`);
+          const label = target?.innerText?.replace(/\s+/g, "");
+          if (!keys.length || !keys.every(k => k === args.uid)) return "pdd_conversation_changed";
+          if (Date.now() >= args.until) return "claim_expiring";
+          if ((ta as HTMLTextAreaElement).disabled || (ta as HTMLTextAreaElement).readOnly) return "pdd_input_missing";
+          if ((ta as HTMLTextAreaElement).value !== args.text) return "pdd_input_mismatch";
+          if (!target) return "pdd_send_control_unverified";
+          const rect = target.getBoundingClientRect();
+          if (rect.width < 4 || rect.height < 4 || getComputedStyle(target).visibility !== "visible" || target.matches(":disabled, [aria-disabled=true]")) return "pdd_send_control_unverified";
+          if (args.point) {
+            const hit = document.elementFromPoint(args.point.x, args.point.y);
+            if (!hit || (hit !== target && !target.contains(hit))) return "pdd_send_control_unverified";
+          }
+          return target.closest("div.reply-box") === ta.closest("div.reply-box") && !target.classList.contains("sendBtn_disabled") && new RegExp(args.label).test(label ?? "") ? null : "pdd_send_control_unverified";
+        }, { uid, text, key: `${nonce}-${selection.candidate}`, until: deadline * 1000 - 1500, label: SEND_LABEL, point: clickPoint });
+      };
       step = "verify";
       const valid = await verifyAtPress(); if (valid) return stop(valid);
-      const point = await button.evaluate(el => {
+      clickPoint = await button.evaluate(el => {
         const node = el as HTMLElement, r = node.getBoundingClientRect();
         const left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
         const top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
         for (const fy of [0.5, 0.25, 0.75, 0.1, 0.9]) for (const fx of [0.5, 0.25, 0.75, 0.1, 0.9]) {
           const x = left + (right - left) * fx, y = top + (bottom - top) * fy;
           const hit = document.elementFromPoint(x, y);
-          if (hit && (hit === node || node.contains(hit))) return { x: x - r.left - node.clientLeft, y: y - r.top - node.clientTop };
+          if (hit && (hit === node || node.contains(hit))) return { x, y };
         }
         return null;
       });
-      // Playwright handles visibility/stability/hit testing. The transport permits one press only.
+      if (!clickPoint) return stop("pdd_send_control_unverified");
+      // 遮挡处理后直接在已命中的视口坐标发送可信输入，避免元素 actionability 在缩放后停住。
+      // transport 在按下前再次核对坐标命中、同一买家与原文，整个过程只允许一次按下。
       step = "click";
-      await button.click({ timeout: left(), noWaitAfter: true, ...(point ? { position: point } : {}) });
+      await page.mouse.click(clickPoint.x, clickPoint.y);
       return { status: "dispatched" };
     };
     return await Promise.race([operation(), new Promise<PageClickResult>(resolve => {
