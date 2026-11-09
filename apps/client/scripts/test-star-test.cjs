@@ -71,18 +71,10 @@ const page = (opts = {}) => `<!doctype html><meta charset="utf-8"><body style="f
 
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
-// 测试自身读写夹具页：macOS 上 Electron 偶发 "Render frame was disposed"（脚本没有执行），稍等重试一次。
-// 页面若真被换掉，clicks 等状态已不在，检查照样失败。
-async function js(wc, code) {
-  try { return await wc.executeJavaScript(code); }
-  catch (err) {
-    if (!/Render frame was disposed/.test(String(err))) throw err;
-    await new Promise((r) => setTimeout(r, 200));
-    return wc.executeJavaScript(code);
-  }
-}
+// macOS CI 上最后一例偶发 "Render frame was disposed" 或卡住：记下渲染进程与调试连接的异常，失败时一并输出。
+const pageEvents = [];
 const watchdog = setTimeout(() => {
-  console.log(JSON.stringify({ ok: false, error: "timeout", results }));
+  console.log(JSON.stringify({ ok: false, error: "timeout", results, pageEvents }));
   app.exit(2);
 }, 180_000);
 
@@ -103,12 +95,16 @@ app.whenReady().then(async () => {
   try {
     const win = new BrowserWindow({ show: false, width: 900, height: 600, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
     win.showInactive();
+    const note = (event, detail) => pageEvents.push({ case: results.length, event, ...detail });
+    win.webContents.on("render-process-gone", (_e, d) => note("render-process-gone", { reason: d.reason, exitCode: d.exitCode }));
+    win.webContents.on("unresponsive", () => note("unresponsive"));
+    win.webContents.debugger.on("detach", (_e, reason) => note("debugger-detach", { reason }));
     const logFile = path.join(temp, "diag", "fixture", "star-test.jsonl");
     const zero = async (name, opts, expect, before, ttl = 60_000) => {
       const { wc, adapter, conv } = await adapterFor(win, page(opts));
-      if (before) await js(wc, before);
+      if (before) await wc.executeJavaScript(before);
       const r = await adapter.starTest("red", conv, Date.now() + ttl);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       check(name, r === expect && clicks.length === 0, { r, clicks });
     };
     {
@@ -116,40 +112,40 @@ app.whenReady().then(async () => {
       check("对话令牌：16 位摘要，不含可读身份", /^[0-9a-f]{16}$/.test(conv ?? "") && !String(conv).includes("9001"), conv);
       check("取令牌不吞掉新买家消息标记（交回 watch）", adapter.pendingFreshBuyer === true, adapter.pendingFreshBuyer);
       const r = await adapter.starTest("red", conv, Date.now() + 60_000);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)) : [];
       check("未收藏：只点红色项并以页面状态确认", r === "confirmed" && JSON.stringify(clicks) === '["red"]', { r, clicks });
       check("点击前写尝试记录，结束写确认记录", log.length === 2 && log[0].phase === "attempt" && log[1].phase === "confirmed", log);
     }
     {
       const { wc, adapter, conv } = await adapterFor(win, page());
-      await js(wc, "setFav('red')");
+      await wc.executeJavaScript("setFav('red')");
       const r = await adapter.starTest("red", conv, Date.now() + 60_000);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       check("已是红色：不点击", r === "already" && clicks.length === 0, { r, clicks });
     }
     {
       const { wc, adapter, conv } = await adapterFor(win, page());
-      await js(wc, "setFav('blue')");
+      await wc.executeJavaScript("setFav('blue')");
       const r = await adapter.starTest("red", conv, Date.now() + 60_000);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       check("已收藏为蓝色：改为红色，不点星标", r === "confirmed" && JSON.stringify(clicks) === '["red"]', { r, clicks });
     }
     {
       const { wc, adapter } = await adapterFor(win, page({ active: false }));
       const r = await adapter.starTest("red", "0123456789abcdef", Date.now() + 60_000);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       check("无已打开对话：不执行", r === "not_executed:conversation_mismatch" && clicks.length === 0, { r, clicks });
     }
     {
       const { wc, adapter, conv } = await adapterFor(win, page(), false);
       const r = await adapter.starTest("red", conv, Date.now() + 60_000);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       check("非诊断模式：不执行", r === "not_executed:probe_mode_required" && clicks.length === 0, { r, clicks });
     }
     for (const [unlinked, expect] of [[false, { has_aria: true, resolves: 1 }], [true, { has_aria: false, resolves: 0 }]]) {
       const { wc } = await adapterFor(win, page({ unlinked }));
-      const l = await js(wc, LINK_PROBE);
+      const l = await wc.executeJavaScript(LINK_PROBE);
       check(`诊断关联记录：星标${unlinked ? "无" : "有"}关联`, l.star_count === 1 && l.star.has_aria === expect.has_aria && l.star.resolves === expect.resolves && !JSON.stringify(l).includes("el-popover"), l);
     }
     {
@@ -171,21 +167,21 @@ app.whenReady().then(async () => {
     // 颜色快照已在 B 上取到、结果交回前又切回 A：用包裹 adapter.run 精确模拟这一时序。
     const flipAround = async (n, opts, expect, expectClicks) => {
       const { wc, adapter, conv } = await adapterFor(win, page(opts));
-      await js(wc, "setFav('blue')");
+      await wc.executeJavaScript("setFav('blue')");
       const orig = adapter.run.bind(adapter);
       let snaps = 0;
       adapter.run = async (code, ...rest) => {
         const snap = code.includes("chat-icon-check") && code.includes("const check = null");
         if (snap && ++snaps === n) {
-          await js(wc, "switchConv(); setFav('red')");
+          await wc.executeJavaScript("switchConv(); setFav('red')");
           const r = await orig(code, ...rest);
-          await js(wc, "switchBack(); setFav('blue')");
+          await wc.executeJavaScript("switchBack(); setFav('blue')");
           return r;
         }
         return orig(code, ...rest);
       };
       const r = await adapter.starTest("red", conv, Date.now() + 60_000);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       check(`A 蓝星、第 ${n} 次颜色快照取自已是红星的 B、交回前切回 A：不追认`, r === expect && JSON.stringify(clicks) === expectClicks, { r, clicks });
     };
     await flipAround(1, {}, "not_executed:conversation_mismatch", "[]");
@@ -193,9 +189,9 @@ app.whenReady().then(async () => {
     await zero("已收藏蓝色、读取期间切到已是红色的另一对话：不报 already", { switchOnHoverN: 1 }, "not_executed:conversation_mismatch", "setFav('blue')");
     {
       const { wc, adapter, conv } = await adapterFor(win, page({ noEffect: true, switchAfterClickMs: 700 }));
-      await js(wc, "setFav('blue')");
+      await wc.executeJavaScript("setFav('blue')");
       const r = await adapter.starTest("red", conv, Date.now() + 60_000);
-      const clicks = await js(wc, "window.clicks.slice()");
+      const clicks = await wc.executeJavaScript("window.clicks.slice()");
       check("已收藏蓝色、点击未生效、确认读取期间切到已是红色的另一对话：不报 confirmed", r === "unknown:page_state_not_confirmed" && JSON.stringify(clicks) === '["red"]', { r, clicks });
     }
     win.destroy();
@@ -204,7 +200,7 @@ app.whenReady().then(async () => {
   }
   clearTimeout(watchdog);
   const ok = results.length > 0 && results.every((r) => r.ok);
-  console.log(JSON.stringify({ ok, results }));
+  console.log(JSON.stringify({ ok, results, pageEvents }));
   fs.rmSync(temp, { recursive: true, force: true });
   app.exit(ok ? 0 : 1);
 });
