@@ -13,6 +13,7 @@ import {
   CAP_MARK_CONVERSATION,
   CAP_TRANSFER_BY_ACCOUNT,
   CAP_REPLY_DEADLINE,
+  CAP_TIMEOUT_TRANSFER,
   CAP_SEND_ITEM,
   ContextMessage,
   ContextOrder,
@@ -40,7 +41,7 @@ import {
   isIdentifier,
 } from "./protocol.js";
 
-import { ReplyTiming, REPLY_DEADLINE_REASON } from "./replyTiming.js";
+import { ReplyTiming, REPLY_DEADLINE_REASON, TIMEOUT_TRANSFER_BUDGET_MS, TRANSFER_RESERVE_MS } from "./replyTiming.js";
 
 export type ShopMode = "observe" | "auto" | "manual";
 export const SHOP_MODES: readonly ShopMode[] = ["observe", "auto", "manual"];
@@ -360,7 +361,7 @@ export class ShopRuntime {
     if (!session || this.stopped) return;
     const started = this.now();
     try {
-      const lease = await this.backend.heartbeat(this.instanceId, session, [...(this.adapter.sendItem ? [CAP_SEND_ITEM] : []), CAP_REPLY_DEADLINE, CAP_GOODS_SNAPSHOT, ...(this.adapter.collectProducts ? [CAP_PRODUCT_KNOWLEDGE] : []), ...(this.markDeclared() ? [CAP_MARK_CONVERSATION] : []), ...(this.transferDeclared() ? [CAP_TRANSFER_BY_ACCOUNT] : [])]);
+      const lease = await this.backend.heartbeat(this.instanceId, session, [...(this.adapter.sendItem ? [CAP_SEND_ITEM] : []), CAP_REPLY_DEADLINE, CAP_TIMEOUT_TRANSFER, CAP_GOODS_SNAPSHOT, ...(this.adapter.collectProducts ? [CAP_PRODUCT_KNOWLEDGE] : []), ...(this.markDeclared() ? [CAP_MARK_CONVERSATION] : []), ...(this.transferDeclared() ? [CAP_TRANSFER_BY_ACCOUNT] : [])]);
       if (lease.instance_id !== this.instanceId || lease.session_id !== session || lease.shop_id !== this.config.shop_id) {
         this.lease = { state: "error", generation: 0, valid_until: 0, detail: "lease_response_mismatch" };
         return;
@@ -613,7 +614,7 @@ export class ShopRuntime {
       return;
     }
     const id = stable ? (m.platform_message_id as string) : `local-${randomUUID()}`;
-    const stored: StoredMessage = { id, stable, role: m.role, kind: m.kind, content: m.content, created_at: m.created_at, ...(m.card ? { card: m.card } : {}), ...(m.image_ref ? { image_ref: m.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, live, session_id: this.sessionId };
+    const stored: StoredMessage = { id, stable, role: m.role, kind: m.kind, content: m.content, created_at: m.created_at, ...(m.card ? { card: m.card } : {}), ...(m.image_ref ? { image_ref: m.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, ...(this.deadlineConfirmed(this.lease.generation) && this.capabilities.has(CAP_TIMEOUT_TRANSFER) ? { timeout_transfer: true as const } : {}), live, session_id: this.sessionId };
     this.replyTiming.observe(stored, true);
     const known = this.journal.conversation(m.conversation_id).messages.findLast((x) => x.card?.product_key)?.card?.product_key;
     this.journal.addMessage(m.conversation_id, stored);
@@ -700,6 +701,27 @@ export class ShopRuntime {
     return message ? this.replyTiming.remaining(message) : 0;
   }
 
+  private ordinaryRemaining(conversationId: string, messageId: string) {
+    return Math.max(0, this.remaining(conversationId, messageId) - (this.message(conversationId, messageId)?.timeout_transfer ? TRANSFER_RESERVE_MS : 0));
+  }
+
+  /** Only the active execution stack may pass an attempt: no platform action has begun. */
+  private async requestTimeoutTransfer(ev: EventRecord, attemptId?: string): Promise<boolean> {
+    if (!ev.timeout_transfer || this.ordinaryRemaining(ev.conversation_id, ev.message_id) > 0 || this.remaining(ev.conversation_id, ev.message_id) <= 0) return false;
+    if (this.stopped || this.config.mode !== "auto" || ev.instance_id !== this.instanceId || ev.session_id !== this.sessionId || !this.leaseValid(ev.generation) || !this.capabilities.has(CAP_TIMEOUT_TRANSFER)) return false;
+    if (ev.attempt && (ev.attempt.attempt_id !== attemptId || ev.attempt.receipt || !["claimed", "sending"].includes(ev.attempt.phase))) return false;
+    const owner = { instance_id: ev.instance_id, session_id: ev.session_id, generation: ev.generation };
+    try {
+      const snap = await this.backend.timeoutTransfer(ev.event_id, owner, Math.min(TRANSFER_RESERVE_MS, Math.floor(this.remaining(ev.conversation_id, ev.message_id))), attemptId);
+      this.saveSnapshot(ev, snap);
+    } catch {
+      // A lost response never authorizes continuing the stale reply.
+      try { this.saveSnapshot(ev, await this.backend.getEvent(ev.event_id)); }
+      catch { return false; }
+    }
+    return ev.snapshot?.decision?.action === "transfer" && (!attemptId || (ev.snapshot.delivery.status === "claimed" && ev.snapshot.delivery.attempt_id === attemptId));
+  }
+
   private expired(conversationId: string, messageId: string, ev?: EventRecord): boolean {
     if (this.remaining(conversationId, messageId) > 0) return false;
     this.noteDeadline(conversationId, messageId);
@@ -766,15 +788,20 @@ export class ShopRuntime {
     let history;
     const prepStart = Date.now();
     try {
-      history = await measured("history", () => withTimeout(this.adapter.fetchHistory(conversationId), this.remaining(conversationId, messageId)));
+      history = await measured("history", () => withTimeout(this.adapter.fetchHistory(conversationId), this.ordinaryRemaining(conversationId, messageId)));
     } catch {
-      if (!this.expired(conversationId, messageId)) this.journal.note(conversationId, messageId, "history_fetch_failed");
-      return;
+      if (this.expired(conversationId, messageId)) return;
+      if (!this.message(conversationId, messageId)?.timeout_transfer || this.ordinaryRemaining(conversationId, messageId) > 0) {
+        this.journal.note(conversationId, messageId, "history_fetch_failed");
+        return;
+      }
+      history = { messages: [], complete: false };
+
     }
     let added = false;
     for (const hm of history.messages) {
       if (hm.conversation_id !== conversationId || !isIdentifier(hm.platform_message_id) || this.journal.hasMessage(conversationId, hm.platform_message_id)) continue;
-      this.journal.addMessage(conversationId, { id: hm.platform_message_id, stable: true, role: hm.role, kind: hm.kind, content: hm.content, created_at: hm.created_at, ...(hm.card ? { card: hm.card } : {}), ...(hm.image_ref ? { image_ref: hm.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, live: false, session_id: session });
+      this.journal.addMessage(conversationId, { id: hm.platform_message_id, stable: true, role: hm.role, kind: hm.kind, content: hm.content, created_at: hm.created_at, ...(hm.card ? { card: hm.card } : {}), ...(hm.image_ref ? { image_ref: hm.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, ...(this.deadlineConfirmed(generation) && this.capabilities.has(CAP_TIMEOUT_TRANSFER) ? { timeout_transfer: true as const } : {}), live: false, session_id: session });
       this.replyTiming.observe(this.message(conversationId, hm.platform_message_id)!, true);
       this.journal.note(conversationId, hm.platform_message_id, "history_sync");
       added = true;
@@ -782,15 +809,15 @@ export class ShopRuntime {
     if (added) this.journal.bumpRevision(conversationId, "history_merged");
     const historyDone = Date.now();
     if (this.expired(conversationId, messageId)) return;
-    // 订单与可发送项共用一个准备截止（默认 2 秒），也不超过 20 秒剩余预算。读不完的内容省略，不当作“没有”。
+    // 订单与可发送项共用一个准备截止，不能占用超时转接的储备时间。
     const prepDeadline = Date.now() + this.timing.prepBudgetMs;
-    const prepLeft = () => Math.max(0, Math.min(prepDeadline - Date.now(), this.remaining(conversationId, messageId)));
+    const prepLeft = () => Math.max(0, Math.min(prepDeadline - Date.now(), this.ordinaryRemaining(conversationId, messageId)));
     // 收集可发送项时适配器会切到推荐商品页签再切回订单页签并等订单读完；此时单独先读一次订单是重复读取。
     const withOptions = this.config.mode === "auto" && this.sendItemConfirmed() && !!this.adapter.sendOptionsSettled;
-    if (!withOptions) await measured("orders", async () => { await this.adapter.ordersSettled?.(conversationId, Math.min(this.timing.ordersWaitMs, prepLeft())); });
+    if (!withOptions && prepLeft() > 0) await measured("orders", async () => { await this.adapter.ordersSettled?.(conversationId, Math.min(this.timing.ordersWaitMs, prepLeft())); });
     if (this.expired(conversationId, messageId)) return;
     const ordersDone = Date.now();
-    if (withOptions) await measured("options", async () => { await this.adapter.sendOptionsSettled!(conversationId, prepLeft()); });
+    if (withOptions && prepLeft() > 0) await measured("options", async () => { await this.adapter.sendOptionsSettled!(conversationId, prepLeft()); });
     if (this.expired(conversationId, messageId)) return;
     this.log(`timing conv=${this.refs.conv(conversationId)} step=prepare history_ms=${historyDone - prepStart} orders_ms=${ordersDone - historyDone} options_ms=${Date.now() - ordersDone} budget_ms=${this.timing.prepBudgetMs}${withOptions ? " orders_in_options=true" : ""}`);
     const conv = this.journal.conversation(conversationId);
@@ -837,19 +864,24 @@ export class ShopRuntime {
     // 契约“会话操作（1.3 草案）”：能力确认后必带 conv_state；读不到如实报 marked=null，不捏造 false、不丢弃事件。
     if (this.markConfirmed()) {
       const read = await measured("conv_state", () =>
-        withTimeout(this.adapter.readConvState?.(conversationId, prepLeft()) ?? Promise.resolve(null), prepLeft()).catch(() => null),
+        prepLeft() > 0 ? withTimeout(this.adapter.readConvState?.(conversationId, prepLeft()) ?? Promise.resolve(null), prepLeft()).catch(() => null) : Promise.resolve(null),
       );
       if (this.expired(conversationId, messageId)) return;
       const marked = read?.marked ?? null;
       request.context.conv_state = { marked, color: marked === true ? (read?.color ?? null) : null, observed_at: this.now() };
     }
-    const images = await measured("images", () => this.latestImages(last));
+    const images = this.ordinaryRemaining(conversationId, messageId) > 0 ? await measured("images", () =>
+      withTimeout(this.latestImages(last), this.ordinaryRemaining(conversationId, messageId)).catch(() => ({ attachments: [], digests: [] })),
+    ) : { attachments: [], digests: [] };
     if (this.expired(conversationId, messageId)) return;
     if (this.sessionId !== session) return this.journal.note(conversationId, messageId, "session_changed");
-    // 契约 A.3：本租约确认能力后，在首次持久化请求体前冻结剩余预算（向下取整，0–20000）；之后重投不再计算。
+    // 原事件预算与模式一同冻结；能力撤回不能降级后继续普通回复。
     let budget: number | undefined;
+    const timeoutTransfer = this.message(conversationId, messageId)?.timeout_transfer === true;
+    if (timeoutTransfer && (!this.deadlineConfirmed(generation) || !this.capabilities.has(CAP_TIMEOUT_TRANSFER))) return this.journal.note(conversationId, messageId, "reply_deadline_withdrawn");
     if (this.deadlineConfirmed(generation)) {
-      budget = Math.min(MAX_REMAINING_BUDGET_MS, Math.floor(this.remaining(conversationId, messageId)));
+      budget = Math.min(timeoutTransfer ? TIMEOUT_TRANSFER_BUDGET_MS : MAX_REMAINING_BUDGET_MS, Math.floor(this.remaining(conversationId, messageId)));
+      if (timeoutTransfer) request.timeout_transfer = true;
       // 本地算出 0 说明已过期：不提交，直接记“本条待人工”。
       if (!(budget > 0)) {
         this.noteDeadline(conversationId, messageId);
@@ -896,6 +928,7 @@ export class ShopRuntime {
       history_complete: historyComplete,
       text_only: textOnly,
       ...(budget !== undefined ? { budget_ms: budget } : {}),
+      ...(timeoutTransfer ? { timeout_transfer: true as const } : {}),
     });
     this.changed();
     await this.submitAndPoll(this.journal.events.get(request.event_id) as EventRecord);
@@ -1004,8 +1037,10 @@ export class ShopRuntime {
         this.log(`timing event_ref=${this.refs.event(ev.event_id)} step=decide ms=${Date.now() - started} ok=false error=poll_gave_up`);
         return;
       }
-      await sleep(ev.attempt ? delay : Math.min(delay, this.remaining(ev.conversation_id, ev.message_id)));
+      await sleep(ev.attempt ? delay : Math.min(delay, this.ordinaryRemaining(ev.conversation_id, ev.message_id) || this.remaining(ev.conversation_id, ev.message_id)));
       if (!ev.attempt && this.expired(ev.conversation_id, ev.message_id, ev)) return;
+      if (!ev.attempt && await this.requestTimeoutTransfer(ev)) break;
+      if (this.journal.events.get(ev.event_id)?.snapshot?.state === "ready") break;
       try {
         const snap = await this.backend.getEvent(ev.event_id);
         this.saveSnapshot(ev, snap);
@@ -1113,7 +1148,7 @@ export class ShopRuntime {
     if (!this.leaseValid(ev.generation)) return "lease_invalid";
     if (conv.revision !== ev.context_revision) return "superseded";
     if (turnEnd(conv.messages)?.id !== ev.message_id) return "superseded";
-    if (!ev.text_only) return "unsupported_content";
+    if (!ev.text_only && !(ev.timeout_transfer && ev.snapshot?.decision?.action === "transfer")) return "unsupported_content";
     const decision = ev.snapshot?.decision;
     if (!decision || ev.snapshot?.state !== "ready") return "not_ready";
     if (decision.action === "send_item") {
@@ -1128,7 +1163,7 @@ export class ShopRuntime {
     } else if (decision.action !== "reply" || !decision.text.trim()) return "not_reply";
     if (decision.expires_at - this.now() < this.timing.decisionSafety) return "decision_expired";
     if (!afterClaim && ev.attempt) return "already_attempted";
-    if (this.remaining(ev.conversation_id, ev.message_id) <= 0) return REPLY_DEADLINE_REASON;
+    if (this.remaining(ev.conversation_id, ev.message_id) <= 0 || (ev.timeout_transfer && decision.action !== "transfer" && this.ordinaryRemaining(ev.conversation_id, ev.message_id) <= 0)) return REPLY_DEADLINE_REASON;
     return null;
   }
 
@@ -1188,6 +1223,7 @@ export class ShopRuntime {
 
   /** 同一店铺只有一个平台页面；排队结束后才重新核验并申请许可。 */
   private async considerSendNow(ev: EventRecord) {
+    if (!ev.attempt && ev.snapshot?.decision?.action !== "transfer") await this.requestTimeoutTransfer(ev);
     const action = ev.snapshot?.decision?.action;
     if (action !== "reply" && action !== "send_item" && action !== "mark" && action !== "transfer") return;
     const blocked = this.sendingConversations.has(ev.conversation_id) ? "conversation_busy" : this.sendBlocker(ev);
@@ -1238,18 +1274,19 @@ export class ShopRuntime {
       }
     }
     this.saveSnapshot(ev, snap);
-    const d = snap.delivery;
-    if (d.attempt_id !== attemptId || d.status !== "claimed") {
+    if (snap.delivery.attempt_id !== attemptId || snap.delivery.status !== "claimed") {
       this.journal.setAttempt(ev.event_id, attemptId, "claim_failed", "claim_not_granted");
       return;
     }
     this.journal.setAttempt(ev.event_id, attemptId, "claimed");
+    if (snap.decision?.action !== "transfer" && await this.requestTimeoutTransfer(ev, attemptId)) snap = ev.snapshot!;
+    const d = snap.delivery;
     // 平台发送与回执上传都要在许可有效期内完成；附加发送的确认截止为许可到期前 2 秒。
     const isItem = snap.decision?.action === "send_item";
     // 标星的确认截止同附加发送：许可到期前 2 秒（契约 1.3“前台执行”第 5 条）。
     const isMark = snap.decision?.action === "mark";
     const isTransfer = snap.decision?.action === "transfer";
-    const sendWindow = (d.claim_expires_at ?? 0) - this.now() - (isItem || isMark || isTransfer ? this.timing.itemReceiptReserve : this.timing.receiptReserve);
+    const sendWindow = Math.min((d.claim_expires_at ?? 0) - this.now() - (isItem || isMark || isTransfer ? this.timing.itemReceiptReserve : this.timing.receiptReserve), ev.timeout_transfer && isTransfer ? this.remaining(ev.conversation_id, ev.message_id) / 1000 - this.timing.itemReceiptReserve : Infinity);
     const blocked = this.sendBlocker(ev, true) ?? (sendWindow < Math.max(this.timing.minSendWindow, this.timing.claimSafety) ? "claim_expiring" : null);
     if (blocked) {
       this.journal.setBlocked(ev.event_id, blocked);
@@ -1275,6 +1312,7 @@ export class ShopRuntime {
     } catch (err) {
       result = { status: "unknown", reason: (err as Error)?.message === "send_timeout" ? "send_timeout" : "send_exception" };
     }
+    if (result.status === "not_sent" && result.reason === REPLY_DEADLINE_REASON && await this.transferBeforePlatform(ev, attemptId)) return;
     if (result.status === "confirmed" && !isIdentifier(result.platform_message_id)) result = { status: "unknown", reason: "platform_message_id_invalid" };
     if (isItem && result.status === "confirmed" && (d.claim_expires_at ?? 0) - this.now() < this.timing.itemReceiptReserve) result = { status: "unknown", reason: "confirmed_after_deadline" };
     if (result.status === "confirmed") this.finish(ev, attemptId, "sent", null, "sent", result.platform_message_id);
@@ -1304,6 +1342,7 @@ export class ShopRuntime {
     } catch (err) {
       result = { status: "unknown", reason: (err as Error)?.message === "send_timeout" ? "send_timeout" : "send_exception" };
     }
+    if (result.status === "not_sent" && result.reason === REPLY_DEADLINE_REASON && await this.transferBeforePlatform(ev, attemptId)) return;
     if (result.status === "confirmed" && claimExpiresAt - this.now() < this.timing.itemReceiptReserve) result = { status: "unknown", reason: "confirmed_after_deadline", page_observed: result.page_observed };
     // 确认后再核对平台登录店铺与会话：归属已变化时成功不能归于本次（契约“来源绑定”页面或登录变化）。
     if (result.status === "confirmed" && (this.platformCheck() || ev.session_id !== this.sessionId)) result = { status: "unknown", reason: "platform_changed_during_mark", page_observed: result.page_observed };
@@ -1311,6 +1350,19 @@ export class ShopRuntime {
     if (result.status === "confirmed") this.finish(ev, attemptId, "sent", null, "sent", null, observed);
     else this.finish(ev, attemptId, result.status, result.reason, result.status, null, observed);
     if (result.status === "unknown") this.countUnknown("mark", result.reason);
+  }
+
+  private async transferBeforePlatform(ev: EventRecord, attemptId: string): Promise<boolean> {
+    if (!await this.requestTimeoutTransfer(ev, attemptId)) return false;
+    const expires = ev.snapshot?.delivery.claim_expires_at ?? 0;
+    const window = Math.min(expires - this.now(), this.remaining(ev.conversation_id, ev.message_id) / 1000) - this.timing.itemReceiptReserve;
+    const blocked = this.sendBlocker(ev, true) ?? (window < Math.max(this.timing.minSendWindow, this.timing.claimSafety) ? "claim_expiring" : null);
+    if (blocked) this.finish(ev, attemptId, "aborted_before_send", blocked, "not_sent");
+    else {
+      this.journal.setAttempt(ev.event_id, attemptId, "sending", "timeout_transfer");
+      await this.deliverTransfer(ev, attemptId, expires, window);
+    }
+    return true;
   }
 
   private async deliverTransfer(ev: EventRecord, attemptId: string, claimExpiresAt: number, sendWindow: number) {
@@ -1334,7 +1386,7 @@ export class ShopRuntime {
     if (ev.attempt?.detail === "unmark_and_transfer" && !(result.status === "confirmed" && result.unmarked === true)) {
       result = { status: "unknown", reason: "transfer_binding_unproven", page_observed: result.status === "not_sent" ? "unknown" : result.page_observed };
     }
-    if (result.status === "confirmed" && (claimExpiresAt - this.now() < this.timing.itemReceiptReserve || this.platformCheck() || ev.session_id !== this.sessionId)) {
+    if (result.status === "confirmed" && (claimExpiresAt - this.now() < this.timing.itemReceiptReserve || (ev.timeout_transfer && this.remaining(ev.conversation_id, ev.message_id) <= 0) || this.platformCheck() || ev.session_id !== this.sessionId)) {
       result = { status: "unknown", reason: "transfer_confirmation_invalid" };
     }
     const observed = result.status === "not_sent" ? undefined : result.page_observed;

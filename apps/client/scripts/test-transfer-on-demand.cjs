@@ -64,6 +64,37 @@ app.whenReady().then(async () => {
       cases.push({ header_close: header, ordinary, missing, before_match: beforeMatch, matched, after });
       wc.debugger.sendCommand = native;
     }
+    // 新预算贯穿真实后台与桌面适配器；只改变单调测试钟，不等待真实买家或调用平台。
+    {
+      const { startBackend, makeShop, settle, eventsOf, waitFor } = require(path.join(root, 'dist/test/helpers.js'));
+      const backend = await startBackend();
+      let h;
+      try {
+        await backend.settings('shop-a', true, undefined, 'rules', { model_timeout: { action: 'transfer', account: 'fictional-main', allow_unmark: false } });
+        await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(pageHtml(true)));
+        await wc.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+        const a = new PddPageAdapter('fictional', 'Fictional');
+        a.window = win; a.tracker = { status: () => ({ logged_in: true, identity: { platform_shop_id: 'fictional-mall' } }) };
+        a.freshActive = async () => '9001'; a.openConversation = async () => null;
+        let mono = 0;
+        h = await makeShop({ backend, login: false, platformShopId: 'fictional-mall', declareTransfer: true,
+          monotonicNow: () => mono, timing: { sendTimeoutMs: 10000, unknownCheckDelaysMs: [] } });
+        h.mock.transferConversation = r => a.transferConversation(r);
+        const history = h.mock.fetchHistory.bind(h.mock);
+        h.mock.fetchHistory = async id => { const value = await history(id); mono = 45000; return value; };
+        await h.mock.login(); await waitFor(() => h.rt.transferExecutable(), 'transfer capability');
+        h.mock.injectBuyerMessage({ conversation_id: '9001', content: '营业时间' });
+        await settle(h.rt);
+        const [event] = eventsOf(h.rt), counts = await wc.executeJavaScript('({opens,rows,transfers,sends})');
+        assert.equal(event.attempt.phase, 'sent', JSON.stringify(event.attempt));
+        assert.deepEqual(counts, { opens: 1, rows: 1, transfers: 1, sends: 0 });
+        assert.equal((await backend.events('shop-a'))[0].delivery.status, 'sent');
+        cases.push({ name: 'timeout_45s_original_event_real_backend_adapter', status: event.attempt.phase, counts });
+      } finally {
+        if (h) { await h.rt.stop(); fs.rmSync(h.dir, { recursive: true, force: true }); }
+        await backend.stop();
+      }
+    }
     // 平台点“转移会话”后先取客服名单，返回非空才弹框：名单的进展由测试按场景直接给出（真实监听另有单元测试）。
     const listCases = [
       { name: 'slow_list_dialog_after_5s', open: "setTimeout(()=>{document.querySelector('.el-dialog__wrapper').style.display='block'},5000)", list: 'requested', status: 'confirmed' },

@@ -62,15 +62,15 @@ test("失联期间连发全部保留；恢复后只处理最新一条，并发�
   assert.equal(h.mock.platformSends.length, 1);
 });
 
-test("恢复不重置原20秒预算，已过9秒只剩11秒", async () => {
+test("恢复不重置原60秒预算，已过9秒只剩51秒", async () => {
   await duringOutage(); mono = 9000;
   await recover();
   await waitFor(() => h.mock.platformSends.length === 1, "send in original window");
-  assert.equal(eventsOf(h.rt)[0].budget_ms, 11000);
+  assert.equal(eventsOf(h.rt)[0].budget_ms, 51000);
 });
 
-test("失联耗尽20秒后不复活；新的买家消息仍正常处理", async () => {
-  const messages = await duringOutage(); mono = 21000;
+test("失联耗尽60秒后不复活；新的买家消息仍正常处理", async () => {
+  const messages = await duringOutage(); mono = 61000;
   await recover();
   assert.equal(eventsOf(h.rt).length, 0);
   assert.equal(h.rt.journal.conversation("buyer-1").notes[messages[0].platform_message_id!], "reply_deadline_exceeded");

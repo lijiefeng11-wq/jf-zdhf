@@ -84,29 +84,29 @@ test("ready 排队期间心跳传输失败：恢复后发送一次并上传回�
 });
 
 // 2. 用单调时钟推进时间，直接观察点击前剩余预算，不靠真实等待。
-test("ready 恢复只剩一秒仍可开始发送，沿用首次观察时间和原预算", async () => {
+test("ready 恢复普通回复窗口只剩一秒仍可开始发送，沿用首次观察时间和60秒总预算", async () => {
   const ev = await blockedReady();
   const message = h.rt.journal.conversation("queued").messages.find(m => m.id === ev.message_id)!;
   const firstSeen = message.first_seen_at;
   const send = h.mock.send.bind(h.mock);
   h.mock.send = async request => {
-    assert.equal(mono, 19_000);
+    assert.equal(mono, 44_000);
     assert.equal(request.recheck?.(), null);
     const result = await send(request);
-    mono = 21_000;
+    mono = 46_000;
     return result;
   };
-  mono = 19_000;
+  mono = 44_000;
   await recover();
   await assertSent(ev);
   assert.equal(message.first_seen_at, firstSeen);
-  assert.equal(ev.budget_ms, 20_000);
+  assert.equal(ev.budget_ms, 60_000);
 });
 
 // 3. 恢复入口也要推进截止处理，避免一直显示“后台未连接”。
 test("ready 恢复前预算耗尽：不领取不发送，显示本条待人工", async () => {
   const ev = await blockedReady();
-  mono = 20_000;
+  mono = 60_000;
   await recover();
   const conv = h.rt.journal.conversation("queued");
   assert.equal(ev.attempt, null);

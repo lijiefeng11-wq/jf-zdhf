@@ -120,6 +120,11 @@ export class BackendClient {
     return parseSnapshot(await this.request("POST", `/api/v1/events/${encodeURIComponent(eventId)}/claim`, body));
   }
 
+  async timeoutTransfer(eventId: string, owner: { instance_id: string; session_id: string; generation: number }, remaining_budget_ms: number, attempt_id?: string): Promise<EventSnapshot> {
+    const body = JSON.stringify({ ...owner, remaining_budget_ms, ...(attempt_id ? { attempt_id } : {}) });
+    return parseSnapshot(await this.request("POST", `/api/v1/events/${encodeURIComponent(eventId)}/timeout_transfer`, body));
+  }
+
   /** 契约 A.5：只放弃自己的未领取事件；重试必须原样使用同一四字段。 */
   async cancel(eventId: string, owner: { instance_id: string; session_id: string; generation: number }): Promise<EventSnapshot> {
     const body = JSON.stringify({ instance_id: owner.instance_id, session_id: owner.session_id, generation: owner.generation, reason: "reply_deadline_exceeded" });

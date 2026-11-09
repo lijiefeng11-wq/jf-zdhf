@@ -32,7 +32,7 @@ function findPython(): string {
 export type TestBackend = {
   url: string;
   stop(): Promise<void>;
-  settings(shop: string, enabled: boolean, rules?: { id: string; contains: string; reply: string }[], mode?: "rules" | "model" | "hybrid"): Promise<void>;
+  settings(shop: string, enabled: boolean, rules?: { id: string; contains: string; reply: string }[], mode?: "rules" | "model" | "hybrid", fallback?: Record<string, unknown>): Promise<void>;
   events(shop: string): Promise<any[]>;
 };
 
@@ -97,8 +97,8 @@ export async function startBackend(opts: { model?: Record<string, unknown> } = {
       await new Promise((r) => child.once("exit", r));
       fs.rmSync(dir, { recursive: true, force: true });
     },
-    async settings(shop, enabled, rules = [{ id: "hours", contains: "营业时间", reply: HOURS_REPLY }], mode = "rules") {
-      await admin("PUT", `/api/v1/admin/shops/${shop}/settings`, { enabled, mode, system_prompt: "测试", rules });
+    async settings(shop, enabled, rules = [{ id: "hours", contains: "营业时间", reply: HOURS_REPLY }], mode = "rules", fallback) {
+      await admin("PUT", `/api/v1/admin/shops/${shop}/settings`, { enabled, mode, system_prompt: "测试", rules, ...(fallback ? { fallback } : {}) });
     },
     async events(shop) {
       return (await admin("GET", `/api/v1/admin/events?shop_id=${shop}&limit=200`)).events;

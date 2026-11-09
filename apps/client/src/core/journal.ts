@@ -15,6 +15,8 @@ export type StoredMessage = {
   received_at: number;
   /** 首次确定消息身份的墙钟毫秒，仅用于重启恢复，缺失时不重新获得自动发送预算。 */
   first_seen_at?: number;
+  /** 首次观察时确认的新预算模式；旧消息不得因后续心跳被升级。 */
+  timeout_transfer?: true;
   /** false：历史同步/重连回补，不作为新消息处理。 */
   live: boolean;
   session_id: string | null;
@@ -81,6 +83,7 @@ export type EventRecord = {
   text_only: boolean;
   /** 契约 A：请求体里冻结的剩余预算（毫秒）；未确认能力时没有。 */
   budget_ms?: number;
+  timeout_transfer?: true;
   stage: EventStage;
   error: string | null;
   snapshot: EventSnapshot | null;

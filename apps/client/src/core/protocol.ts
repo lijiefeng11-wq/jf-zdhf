@@ -110,6 +110,7 @@ export const SEND_OPTION_LIMITS = { instructions: 10, goods: 20, videos: 50 } as
 export const SEND_OPTION_KIND: Record<SendItemType, keyof SendOptions> = { instruction: "instructions", goods_card: "goods", video: "videos" };
 /** 契约 A：独立能力名；确认后新事件可带剩余预算、可取消未领取事件。 */
 export const CAP_REPLY_DEADLINE = "reply_deadline";
+export const CAP_TIMEOUT_TRANSFER = "reply_timeout_transfer";
 export const MAX_REMAINING_BUDGET_MS = 20000;
 /** 契约 A 的截止终态原因，也是 claim 409 的错误码。 */
 export const DEADLINE_REASON = "reply_deadline_exceeded";
@@ -126,6 +127,7 @@ export type EventRequest = {
   received_at: number;
   /** 契约 A：仅在本租约确认 reply_deadline 后提交；冻结后不再改变。 */
   remaining_budget_ms?: number;
+  timeout_transfer?: true;
   context: { history_complete: boolean; messages: ContextMessage[]; orders?: ContextOrder[]; goods?: GoodsSnapshot[]; send_options?: SendOptions; conv_state?: ConvState };
 };
 
