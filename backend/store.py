@@ -350,7 +350,7 @@ class Store:
             resumed = owner and old["session_id"] == p["session_id"] and bool(old.get("restart_pending"))
             gen = old["generation"] if same or resumed else (old["generation"] + 1 if old else 1)
             lease = {"shop_id": identity["shop_id"], "client_id": identity["client_id"], "instance_id": p["instance_id"], "session_id": p["session_id"], "generation": gen, "expires_at": now + 60}
-            lease["capabilities"] = [cap for cap in (senditems.CAPABILITY, deadlines.CAPABILITY, goods_snapshot.CAPABILITY, "product_knowledge",
+            lease["capabilities"] = [cap for cap in (senditems.CAPABILITY, deadlines.CAPABILITY, deadlines.TRANSFER_CAPABILITY, goods_snapshot.CAPABILITY, "product_knowledge",
                                                     *conversation_actions.READY_CAPABILITIES) if cap in caps]
             settings = self._settings(identity["shop_id"])
             policies = [rule.get("handling", {}) for rule in settings["rules"]] + list(settings.get("fallback", {}).values())
@@ -515,16 +515,50 @@ class Store:
         self._save_timing(shop, event, timing)
         self._clocks.pop((shop, event), None)
 
+    def _timeout_decision(self, row, clock):
+        original = json.loads(row["payload"])
+        reason = "timeout_transfer_not_configured"
+        try:
+            require(self._is_latest(row), "superseded", 409)
+            settings = self._settings(row["shop_id"])
+            require(settings["enabled"] and settings["version"] == row["settings_version"], "settings_changed", 409)
+            lease = self._check_lease({"shop_id": row["shop_id"], "client_id": row["client_id"]}, original)
+            require(deadlines.TRANSFER_CAPABILITY in lease.get("capabilities", []), "capability_not_confirmed", 409)
+            policy = settings.get("fallback", {}).get("model_timeout", {})
+            if policy.get("action") == "transfer":
+                require(conversation_actions.TRANSFER_CAPABILITY in lease.get("capabilities", []), "capability_not_confirmed", 409)
+                resolved = conversation_actions.resolve(policy, original["context"], lease["capabilities"],
+                                                        settings["version"], "fallback:model_timeout")
+                return {**resolved, "expires_at": time.time() + max(0, clock["deadline"] - time.monotonic())}
+        except ApiError as exc:
+            reason = exc.code
+        return {"action": "handoff", "text": "", "reason": reason, "expires_at": time.time()}
+
+    def _switch_timeout(self, row, clock):
+        result = json.loads(row["decision"]) if row["decision"] else {}
+        # Once selected, neither maintenance nor a delayed model can replace it.
+        if clock.get("timeout_switched") or result.get("action") == "transfer":
+            return
+        self._finish(row["shop_id"], row["event_id"], self._timeout_decision(row, clock))
+        clock["timeout_switched"] = True
+
     def _expire_deadline(self, row):
         clock = self._clocks.get((row["shop_id"], row["event_id"]))
-        if clock and clock.get("deadline") is not None and time.monotonic() >= clock["deadline"]:
+        if not clock or clock.get("deadline") is None:
+            return
+        now = time.monotonic()
+        if now >= clock["deadline"]:
             self._terminate_deadline(row, "deadline_exceeded")
             self._clocks.pop((row["shop_id"], row["event_id"]), None)
+        elif clock.get("reply_deadline") is not None and now >= clock["reply_deadline"] and self._cancellable(row):
+            self._switch_timeout(row, clock)
 
     def _expire_deadlines(self):
         now = time.monotonic()
         for key, clock in list(self._clocks.items()):
-            if clock.get("deadline") is not None and now >= clock["deadline"]:
+            total_due = clock.get("deadline") is not None and now >= clock["deadline"]
+            reply_due = clock.get("reply_deadline") is not None and not clock.get("timeout_switched") and now >= clock["reply_deadline"]
+            if total_due or reply_due:
                 row = self.db.execute("SELECT * FROM events WHERE shop_id=? AND event_id=?", key).fetchone()
                 if row:
                     self._expire_deadline(row)
@@ -602,7 +636,10 @@ class Store:
         require(isinstance(p, dict), "invalid_event")
         require("timing" not in p, "invalid_field")
         has_budget = "remaining_budget_ms" in p
-        require(not has_budget or deadlines.valid_budget(p["remaining_budget_ms"]), "invalid_remaining_budget")
+        transfer_budget = p.get("timeout_transfer") is True
+        require("timeout_transfer" not in p or transfer_budget, "invalid_timeout_transfer")
+        require(not transfer_budget or has_budget, "invalid_remaining_budget")
+        require(not has_budget or deadlines.valid_budget(p["remaining_budget_ms"], transfer_budget), "invalid_remaining_budget")
         validate_event(p)
         digest = hashlib.sha256(json.dumps(p, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
         with self.lock, self.db:
@@ -626,6 +663,8 @@ class Store:
                 require("product_knowledge" in lease.get("capabilities", []), "capability_not_confirmed")
             if has_budget:
                 require(deadlines.CAPABILITY in lease.get("capabilities", []), "capability_not_confirmed")
+            if transfer_budget:
+                require(deadlines.TRANSFER_CAPABILITY in caps, "capability_not_confirmed")
             if "send_options" in p["context"]:
                 require(senditems.CAPABILITY in lease.get("capabilities", []), "capability_not_confirmed")
             prior = self.db.execute("SELECT MAX(revision) FROM events WHERE shop_id=? AND conversation_id=? AND session_id=?", (identity["shop_id"], p["conversation_id"], p["session_id"])).fetchone()[0]
@@ -642,7 +681,8 @@ class Store:
             self.db.execute("INSERT INTO event_runtime VALUES (?,?,?,?,?,?,?)",
                             (identity["shop_id"], p["event_id"], accepted_wall, budget, wall_deadline, accepted_wall, "{}"))
             self._clocks[(identity["shop_id"], p["event_id"])] = {
-                "accepted": accepted_mono, "deadline": accepted_mono + budget / 1000 if has_budget else None}
+                "accepted": accepted_mono, "deadline": accepted_mono + budget / 1000 if has_budget else None,
+                "reply_deadline": accepted_mono + budget / 1000 - deadlines.TRANSFER_RESERVE if transfer_budget else None}
             row = self._row(identity, p["event_id"])
             if has_budget and budget == 0:
                 self._finish(identity["shop_id"], p["event_id"], {"action": "handoff", "text": "", "reason": deadlines.REASON, "expires_at": accepted_wall})
@@ -680,7 +720,7 @@ class Store:
                     if row is None:
                         continue
                     self._expire_deadline(row)
-                    if self._deadline_terminal(self.db.execute("SELECT * FROM events WHERE shop_id=? AND event_id=?", (row["shop_id"], row["event_id"])).fetchone()):
+                    if self.db.execute("SELECT state FROM events WHERE shop_id=? AND event_id=?", (row["shop_id"], row["event_id"])).fetchone()[0] != "pending":
                         continue
                     p = json.loads(row["payload"])
                     settings = self._settings(row["shop_id"])
@@ -704,7 +744,7 @@ class Store:
                     if "accepted" in clock:
                         self._save_timing(row["shop_id"], row["event_id"], {"queue_wait_ms": deadlines.elapsed_ms(clock["accepted"], clock["started"])})
                     if clock.get("deadline") is not None:
-                        job["deadline_monotonic"] = clock["deadline"]
+                        job["deadline_monotonic"] = clock.get("reply_deadline") or clock["deadline"]
                     return job
         finally:
             with self.lock:
@@ -840,6 +880,42 @@ class Store:
             self._expire_deadline(self._row(identity, event))
             return self._view(self._row(identity, event))
 
+    def timeout_transfer(self, identity, event, p):
+        require(isinstance(p, dict) and set(p) in (
+            {"instance_id", "session_id", "generation", "remaining_budget_ms"},
+            {"instance_id", "session_id", "generation", "remaining_budget_ms", "attempt_id"}), "invalid_timeout_transfer")
+        require(type(p["remaining_budget_ms"]) is int and 0 <= p["remaining_budget_ms"] <= 15000, "invalid_remaining_budget")
+        with self.lock, self.db:
+            row = self._row(identity, event)
+            original = json.loads(row["payload"])
+            require(original.get("timeout_transfer") is True, "capability_not_confirmed", 409)
+            require(all(original[k] == p[k] for k in ("instance_id", "session_id", "generation")), "event_session_mismatch", 409)
+            lease = self._check_lease(identity, p)
+            require(deadlines.TRANSFER_CAPABILITY in lease.get("capabilities", []), "capability_not_confirmed", 409)
+            self._expire_claims()
+            row = self._row(identity, event)
+            d = json.loads(row["delivery"])
+            claimed = d["status"] == "claimed" and d["attempt_id"] == p.get("attempt_id")
+            require(claimed or ("attempt_id" not in p and self._cancellable(row)), "timeout_transfer_not_allowed", 409)
+            require(self._is_latest(row), "superseded", 409)
+            settings = self._settings(row["shop_id"])
+            require(settings["enabled"] and settings["version"] == row["settings_version"], "settings_changed", 409)
+            if json.loads(row["decision"] or "{}").get("action") == "transfer":
+                require(conversation_actions.TRANSFER_CAPABILITY in lease.get("capabilities", []), "capability_not_confirmed", 409)
+            clock = self._clocks.get((row["shop_id"], event))
+            require(clock and clock.get("deadline") is not None, deadlines.REASON, 409)
+            clock["deadline"] = min(clock["deadline"], time.monotonic() + p["remaining_budget_ms"] / 1000)
+            if clock["deadline"] <= time.monotonic():
+                require(not claimed, deadlines.REASON, 409)
+                self._terminate_deadline(row, "deadline_exceeded")
+            else:
+                self._switch_timeout(row, clock)
+                if claimed:
+                    d.update(timeout_transfer=True, claim_expires_at=min(time.time() + 10,
+                             time.time() + clock["deadline"] - time.monotonic()))
+                    self._delivery(row, d)
+            return self._view(self._row(identity, event))
+
     def cancel(self, identity, event, p):
         require(isinstance(p, dict), "invalid_cancel")
         require("timing" not in p, "invalid_field")
@@ -896,9 +972,14 @@ class Store:
                                                              lease.get("capabilities", []), settings),
                             "invalid_conversation_action", 409)
                 if d["status"] == "unclaimed":
-                    d.update(status="claimed", attempt_id=p["attempt_id"], claim_expires_at=time.time() + 10)
+                    clock = self._clocks.get((row["shop_id"], event), {})
+                    expires = time.time() + 10
+                    if original.get("timeout_transfer") is True:
+                        expires = min(expires, time.time() + clock.get("deadline", time.monotonic()) - time.monotonic())
+                    d.update(status="claimed", attempt_id=p["attempt_id"], claim_expires_at=expires)
                     self._delivery(row, d)
-                    self._clocks.pop((row["shop_id"], event), None)
+                    if original.get("timeout_transfer") is not True:
+                        self._clocks.pop((row["shop_id"], event), None)
                 return self._view(self._row(identity, event))
 
     def receipt(self, identity, event, p):
