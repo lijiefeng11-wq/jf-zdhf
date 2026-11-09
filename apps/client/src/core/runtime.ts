@@ -801,7 +801,7 @@ export class ShopRuntime {
     let added = false;
     for (const hm of history.messages) {
       if (hm.conversation_id !== conversationId || !isIdentifier(hm.platform_message_id) || this.journal.hasMessage(conversationId, hm.platform_message_id)) continue;
-      this.journal.addMessage(conversationId, { id: hm.platform_message_id, stable: true, role: hm.role, kind: hm.kind, content: hm.content, created_at: hm.created_at, ...(hm.card ? { card: hm.card } : {}), ...(hm.image_ref ? { image_ref: hm.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, live: false, session_id: session });
+      this.journal.addMessage(conversationId, { id: hm.platform_message_id, stable: true, role: hm.role, kind: hm.kind, content: hm.content, created_at: hm.created_at, ...(hm.card ? { card: hm.card } : {}), ...(hm.image_ref ? { image_ref: hm.image_ref } : {}), received_at: this.now(), first_seen_at: this.now() * 1000, ...(this.deadlineConfirmed(generation) && this.capabilities.has(CAP_TIMEOUT_TRANSFER) ? { timeout_transfer: true as const } : {}), live: false, session_id: session });
       this.replyTiming.observe(this.message(conversationId, hm.platform_message_id)!, true);
       this.journal.note(conversationId, hm.platform_message_id, "history_sync");
       added = true;
@@ -870,7 +870,9 @@ export class ShopRuntime {
       const marked = read?.marked ?? null;
       request.context.conv_state = { marked, color: marked === true ? (read?.color ?? null) : null, observed_at: this.now() };
     }
-    const images = this.ordinaryRemaining(conversationId, messageId) > 0 ? await measured("images", () => this.latestImages(last)) : { attachments: [], digests: [] };
+    const images = this.ordinaryRemaining(conversationId, messageId) > 0 ? await measured("images", () =>
+      withTimeout(this.latestImages(last), this.ordinaryRemaining(conversationId, messageId)).catch(() => ({ attachments: [], digests: [] })),
+    ) : { attachments: [], digests: [] };
     if (this.expired(conversationId, messageId)) return;
     if (this.sessionId !== session) return this.journal.note(conversationId, messageId, "session_changed");
     // 原事件预算与模式一同冻结；能力撤回不能降级后继续普通回复。

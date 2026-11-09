@@ -76,6 +76,66 @@ for (const boundary of ["history", "history_failure", "submit", "claim", "before
   });
 }
 
+for (const old of [false, true]) {
+  test(`历史先发现的新消息保留首次观察预算与${old ? "旧20秒" : "60秒转接"}模式`, async () => {
+    const h = await fixture({ old });
+    const history = h.mock.fetchHistory.bind(h.mock);
+    let newer: ReturnType<typeof h.mock.seedBuyerHistory>;
+    h.mock.fetchHistory = async id => {
+      h.mock.fetchHistory = history;
+      newer = h.mock.seedBuyerHistory(id, "营业时间");
+      return history(id);
+    };
+    h.mock.injectBuyerMessage({ conversation_id: "fictional-buyer", content: "先前问题" });
+    await settle(h.rt);
+    assert.equal(eventsOf(h.rt).length, 0);
+    const stored = h.rt.journal.conversation("fictional-buyer").messages.find(m => m.id === newer!.platform_message_id)!;
+    const firstSeen = stored.first_seen_at;
+    assert.equal(stored.timeout_transfer, old ? undefined : true);
+    h.advance(9000);
+    if (!old) {
+      const submit = h.rt.backend.submitEvent.bind(h.rt.backend);
+      h.rt.backend.submitEvent = async body => { const result = await submit(body); h.advance(36000); return result; };
+    }
+    h.mock.redeliver(newer!);
+    await settle(h.rt);
+    const [ev] = eventsOf(h.rt);
+    assert.equal(ev.budget_ms, old ? 11000 : 51000);
+    assert.equal(ev.timeout_transfer, old ? undefined : true);
+    assert.equal(stored.first_seen_at, firstSeen);
+    assert.equal(ev.attempt?.phase, "sent");
+    assert.equal(h.transfers.length, old ? 0 : 1);
+    assert.equal(h.mock.platformSends.length, old ? 1 : 0);
+  });
+}
+
+test("图片下载在45秒准备截止时停止等待，原事件仍有15秒转接且迟到图片不触发动作", async () => {
+  const h = await fixture();
+  const history = h.mock.fetchHistory.bind(h.mock);
+  h.mock.fetchHistory = async id => { const result = await history(id); h.advance(44975); return result; };
+  let finishImage: (() => void) | undefined;
+  h.mock.fetchImage = async () => {
+    setTimeout(() => h.advance(25), 25);
+    return new Promise(resolve => { finishImage = () => resolve({ ok: false, reason: "synthetic_late_image" }); });
+  };
+  try {
+    h.mock.injectBuyerMessage({ conversation_id: "fictional-buyer", content: "图片", kind: "image", image_ref: "synthetic-image" });
+    await waitFor(() => h.transfers.length === 1, "transfer before image resolves");
+    await settle(h.rt);
+    const [ev] = eventsOf(h.rt);
+    assert.equal(ev.budget_ms, 15000);
+    assert.equal(ev.attempt?.phase, "sent");
+    assert.equal(h.mock.platformSends.length, 0);
+    const body = JSON.parse(ev.body);
+    assert.equal(body.context.messages.at(-1).attachments, undefined);
+    finishImage!();
+    await settle(h.rt);
+    assert.equal(eventsOf(h.rt).length, 1);
+    assert.equal(h.transfers.length, 1);
+    assert.equal((await h.backend.events("shop-a"))[0].delivery.status, "sent");
+  } finally { finishImage?.(); }
+});
+
 test("真实后台：45秒前普通回复，开始后越过45秒仍按原回执完成", async () => {
   const h = await fixture();
   const send = h.mock.send.bind(h.mock);
