@@ -36,7 +36,7 @@ const SEND_AREA_PROBE = `(() => {
 })()`;
 const SAFE_ERRORS = new Set(["playwright_page_unavailable", "selector_unavailable", "selector_timeout"]);
 
-/** Real send preparation and one click. Confirmation still comes from the platform response. */
+/** Prepare one send attempt (click, or Enter behind the known fullscreen wrapper). Confirmation is the platform response. */
 export async function clickSendWithPlaywright(wc: WebContents, uid: string, text: string, deadline: number, current: () => string | null,
   clicked: (pressed: boolean) => void, filled: () => void, diagnose: (detail: string) => void = () => undefined): Promise<PageClickResult> {
   let step = "connect";
@@ -60,15 +60,16 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
     const operation = async (): Promise<PageClickResult> => {
       connection = await connectExistingPage(wc, async type => {
         const block = blocked(); if (block) return block;
-        if (type === "mousePressed") {
+        // 回车发送与点击同等对待：按下前核验、整个过程只允许一次按下。
+        if (type === "mousePressed" || type === "keyDown" || type === "rawKeyDown") {
           if (pressed) return "already_attempted";
           refusal = await verifyAtPress();
           const fresh = blocked(); if (fresh) return fresh;
           pressed = true; clicked(true);
-        } else if (type === "mouseReleased") {
+        } else if (type === "mouseReleased" || type === "keyUp") {
           if (!pressed || released) return "already_attempted";
           released = true;
-        }
+        } else if (type === "char") return "already_attempted";
         return null;
       });
       const connectedBlock = blocked();
@@ -127,8 +128,30 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
       const selection = await selectSendControl(html, Math.max(1, deadline * 1000 - Date.now() - 1500));
       if ("error" in selection) return stop("pdd_send_control_unverified");
       const button = page.locator(`[data-claw-send-key="${nonce}-${selection.candidate}"]`);
-      step = "scroll";
-      await button.scrollIntoViewIfNeeded({ timeout: left() });
+      // 日志中挡住按钮的是平台全屏弹窗的空白 wrapper，点击与滚动都会超时。
+      // 仅该 wrapper 覆盖可视区按钮所有取样点时用回复框回车（平台与按钮共用发送方法）；其他遮挡仍走点击核验。
+      step = "hit";
+      const covered = await button.evaluate(el => {
+        const node = el as HTMLElement, r = node.getBoundingClientRect();
+        const left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
+        const top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
+        if (right - left < 4 || bottom - top < 4) return false;
+        const wrappers = new Set<Element>();
+        for (const fy of [0.5, 0.25, 0.75]) for (const fx of [0.5, 0.25, 0.75]) {
+          const hit = document.elementFromPoint(left + (right - left) * fx, top + (bottom - top) * fy);
+          if (!hit?.matches(".fullscreen-dialog-manager .el-dialog__wrapper.full-screen-dialog-basic")) return false;
+          wrappers.add(hit);
+        }
+        // 居中业务弹窗不一定覆盖按钮；外层任意位置有可见子内容时也不能旁路。
+        return [...wrappers].every(wrapper => ![...wrapper.querySelectorAll("*")].some(child => {
+          const rect = child.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight && getComputedStyle(child).visibility === "visible";
+        }));
+      });
+      if (!covered) {
+        step = "scroll";
+        await button.scrollIntoViewIfNeeded({ timeout: left() });
+      }
       const before = blocked(); if (before) return stop(before);
       verifyAtPress = () => input.evaluate((ta, args) => {
         const keys = [...document.querySelectorAll("li.chat-item .chat-item-box.active[data-random]")].map(e => /^([0-9]{1,32})-/.exec(e.getAttribute("data-random") ?? "")?.[1]);
@@ -138,11 +161,31 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
         if (Date.now() >= args.until) return "claim_expiring";
         if ((ta as HTMLTextAreaElement).disabled || (ta as HTMLTextAreaElement).readOnly) return "pdd_input_missing";
         if ((ta as HTMLTextAreaElement).value !== args.text) return "pdd_input_mismatch";
+        if (args.enter) {
+          if (document.activeElement !== ta || /pddMerchant_mac_version/.test(navigator.userAgent)) return "pdd_send_button_covered";
+          if (!target) return "pdd_send_control_unverified";
+          const rect = target.getBoundingClientRect();
+          if (rect.width < 4 || rect.height < 4 || getComputedStyle(target).visibility !== "visible" || target.matches(":disabled, [aria-disabled=true]")) return "pdd_send_control_unverified";
+          const wrapper = document.elementFromPoint((Math.max(0, rect.left) + Math.min(innerWidth, rect.right)) / 2, (Math.max(0, rect.top) + Math.min(innerHeight, rect.bottom)) / 2);
+          if (!wrapper?.matches(".fullscreen-dialog-manager .el-dialog__wrapper.full-screen-dialog-basic") || [...wrapper.querySelectorAll("*")].some(child => {
+            const r = child.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight && getComputedStyle(child).visibility === "visible";
+          })) return "pdd_send_button_covered";
+        }
         return target?.closest("div.reply-box") === ta.closest("div.reply-box") && !target.classList.contains("sendBtn_disabled") && new RegExp(args.label).test(label ?? "") ? null : "pdd_send_control_unverified";
-      }, { uid, text, key: `${nonce}-${selection.candidate}`, until: deadline * 1000 - 1500, label: SEND_LABEL });
+      }, { uid, text, key: `${nonce}-${selection.candidate}`, until: deadline * 1000 - 1500, label: SEND_LABEL, enter: covered });
+      if (covered) {
+        step = "enter";
+        // 焦点不能穿过平台弹窗的焦点锁时停止；按下回车前再次核验焦点、会话与原文。
+        const focused = await input.evaluate(ta => { (ta as HTMLTextAreaElement).focus(); return document.activeElement === ta; });
+        if (!focused) return stop("pdd_send_button_covered");
+        const valid = await verifyAtPress(); if (valid) return stop(valid);
+        const ready = blocked(); if (ready) return stop(ready);
+        await page.keyboard.press("Enter");
+        return { status: "dispatched", via: "enter" };
+      }
       step = "verify";
-      const valid = await verifyAtPress();
-      if (valid) return stop(valid);
+      const valid = await verifyAtPress(); if (valid) return stop(valid);
       const point = await button.evaluate(el => {
         const node = el as HTMLElement, r = node.getBoundingClientRect();
         const left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
