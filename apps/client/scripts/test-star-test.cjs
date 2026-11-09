@@ -71,8 +71,10 @@ const page = (opts = {}) => `<!doctype html><meta charset="utf-8"><body style="f
 
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
+// macOS CI 上最后一例偶发 "Render frame was disposed" 或卡住：记下渲染进程与调试连接的异常，失败时一并输出。
+const pageEvents = [];
 const watchdog = setTimeout(() => {
-  console.log(JSON.stringify({ ok: false, error: "timeout", results }));
+  console.log(JSON.stringify({ ok: false, error: "timeout", results, pageEvents }));
   app.exit(2);
 }, 180_000);
 
@@ -93,6 +95,10 @@ app.whenReady().then(async () => {
   try {
     const win = new BrowserWindow({ show: false, width: 900, height: 600, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
     win.showInactive();
+    const note = (event, detail) => pageEvents.push({ case: results.length, event, ...detail });
+    win.webContents.on("render-process-gone", (_e, d) => note("render-process-gone", { reason: d.reason, exitCode: d.exitCode }));
+    win.webContents.on("unresponsive", () => note("unresponsive"));
+    win.webContents.debugger.on("detach", (_e, reason) => note("debugger-detach", { reason }));
     const logFile = path.join(temp, "diag", "fixture", "star-test.jsonl");
     const zero = async (name, opts, expect, before, ttl = 60_000) => {
       const { wc, adapter, conv } = await adapterFor(win, page(opts));
@@ -194,7 +200,7 @@ app.whenReady().then(async () => {
   }
   clearTimeout(watchdog);
   const ok = results.length > 0 && results.every((r) => r.ok);
-  console.log(JSON.stringify({ ok, results }));
+  console.log(JSON.stringify({ ok, results, pageEvents }));
   fs.rmSync(temp, { recursive: true, force: true });
   app.exit(ok ? 0 : 1);
 });
