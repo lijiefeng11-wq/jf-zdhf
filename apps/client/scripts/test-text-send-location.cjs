@@ -95,6 +95,7 @@ app.whenReady().then(async () => {
   const scenarios = [
     { name: "below_viewport_scrolls_before_click", css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
     { name: "below_viewport_arbitrary_mask_sends_after_scroll", mask: true, css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
+    ...Array.from({ length: 8 }, (_, i) => ({ name: `scroll_mask_frame_sync_${i}`, mask: true, zoom: i % 2 ? 1 : 0.8, css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" })),
     { name: "ancestor_clipping_scrolls_before_click", css: "#composer{height:70px;overflow:hidden}", status: "confirmed" },
     { name: "normal", status: "confirmed" },
     { name: "fullscreen_overlay_trusted_click_confirmed", overlay: true, status: "confirmed" },
