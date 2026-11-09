@@ -30,6 +30,10 @@ class SelectorWorkerTest(unittest.TestCase):
     def test_semantic_label_without_legacy_class(self):
         self.assertEqual(run(area("<span data-claw-send-control='true' data-claw-candidate='6'>发送</span>")), {"candidate": 6, "engine": "scrapling"})
 
+    def test_insist_send_label(self):
+        self.assertEqual(run(area("<div class='send-btn' data-claw-candidate='2'>坚持 发送</div>")),
+                         {"candidate": 2, "engine": "scrapling"})
+
     def test_ambiguous_two_controls(self):
         inner = "<button data-claw-candidate='1'>发送</button><button data-claw-candidate='2'>Send</button>"
         self.assertEqual(run(area(inner)), {"error": "ambig"})
@@ -40,7 +44,7 @@ class SelectorWorkerTest(unittest.TestCase):
         self.assertEqual(run(area("<span data-claw-candidate='3'>发送</span>")), {"error": "absent"})
 
     def test_wrong_text_rejected(self):
-        for text in ("发送商品", "转移", "确定"):
+        for text in ("发送商品", "转移", "确定", "坚持", "坚持发送商品"):
             self.assertEqual(run(area(f"<button data-claw-candidate='4'>{text}</button>")),
                              {"error": "absent"})
 

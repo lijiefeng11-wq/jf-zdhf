@@ -5,9 +5,41 @@ import { connectExistingPage } from "./electronPlaywright.js";
 import { selectSendControl } from "./scraplingSelector.js";
 import type { PageClickResult } from "./pddClick.js";
 
+/**
+ * 平台发送按钮的文字。平台给出“推荐话术”时同一个按钮显示“坚持发送”，点下去仍发送输入框里的原文。
+ */
+const SEND_LABEL = "^(?:(发送|Send)(\\(?((Ctrl\\+)?Enter|回车)\\)?|↵)?|坚持发送)$";
+/**
+ * 平台在“推荐话术”时用 v-show 隐藏 reply-footer，并在回复框里另显示一个 div.send-btn（加载中带 sendBtn_disabled）；
+ * 它和底栏按钮调用同一个发送方法。两处都算候选，不可用的那个按尺寸/禁用类排除。
+ */
+const SEND_CANDIDATES = ".reply-footer button, .reply-footer div, .reply-footer span, .reply-footer [role=button], div.send-btn:not(.sendBtn_disabled)";
+/**
+ * 发送区布局诊断（失败时记日志用）：只取可见性、数量与元素的类名签名，不取任何文字。
+ * 平台在“推荐话术”时会隐藏 reply-footer、在别处显示另一个发送按钮；被浮层盖住时记下盖住它的元素。
+ */
+const SEND_AREA_PROBE = `(() => {
+  const label = new RegExp(${JSON.stringify(SEND_LABEL)});
+  const sig = (el) => el ? el.tagName.toLowerCase() + [...el.classList].slice(0, 2).map((c) => "." + c).join("") : "none";
+  const shown = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width >= 4 && r.height >= 4 && getComputedStyle(el).visibility === "visible"; };
+  const box = document.querySelector("div.reply-box");
+  const footer = box?.querySelector(".reply-footer");
+  const btns = [...(box?.querySelectorAll(".send-btn") ?? [])].filter(shown);
+  const inFooter = btns.find((b) => footer?.contains(b));
+  let hit = "none";
+  const probe = inFooter ?? btns[0];
+  if (probe) { const r = probe.getBoundingClientRect(); const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); hit = h === probe || probe.contains(h) ? "self" : sig(h) + "<" + sig(h?.parentElement); }
+  return "box=" + !!box + " footer=" + shown(footer) + " btns=" + btns.length + " in_footer=" + !!inFooter + " hit=" + hit +
+    " labels=" + btns.map((b) => (label.test(b.innerText.replace(/\\s+/g, "")) ? "ok" : "other") + (b.classList.contains("sendBtn_disabled") ? "-disabled" : "")).join(",") +
+    " gpt=" + shown(box?.querySelector(".gpt-suggest")) + " repeat=" + shown(box?.querySelector(".repeat-interceptor-popup")) +
+    " vis=" + document.visibilityState + " focus=" + document.hasFocus() + " vw=" + innerWidth + "x" + innerHeight;
+})()`;
+const SAFE_ERRORS = new Set(["playwright_page_unavailable", "selector_unavailable", "selector_timeout"]);
+
 /** Real send preparation and one click. Confirmation still comes from the platform response. */
 export async function clickSendWithPlaywright(wc: WebContents, uid: string, text: string, deadline: number, current: () => string | null,
-  clicked: (pressed: boolean) => void, filled: () => void): Promise<PageClickResult> {
+  clicked: (pressed: boolean) => void, filled: () => void, diagnose: (detail: string) => void = () => undefined): Promise<PageClickResult> {
+  let step = "connect";
   let pressed = false, released = false, active = true;
   let connection: Awaited<ReturnType<typeof connectExistingPage>> | null = null;
   let refusal: string | null = null;
@@ -42,6 +74,7 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
       const connectedBlock = blocked();
       if (connectedBlock) { connection.close(); return stop(connectedBlock); }
       const page = connection.page;
+      step = "input";
       const input = page.locator("div.reply-box div.reply-input textarea:visible");
       if (await input.count() !== 1) return stop("pdd_input_missing");
       // Atomic draft check and fill: never replace text that a human entered in the meantime.
@@ -59,13 +92,15 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
       if (fill) return stop(fill);
       filled();
       const block = blocked(); if (block) return stop(block);
-      await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>("div.reply-box .reply-footer *")].some(e => {
+      step = "wait_button";
+      await page.waitForFunction(args => [...document.querySelectorAll("div.reply-box")].flatMap(box => [...box.querySelectorAll<HTMLElement>(args.scope)]).some(e => {
         const r = e.getBoundingClientRect();
-        return /^(发送|Send)(\(?((Ctrl\+)?Enter|回车)\)?|↵)?$/.test(e.innerText?.replace(/\s+/g, "") ?? "") && getComputedStyle(e).visibility === "visible" && r.width >= 4 && r.height >= 4;
-      }), undefined, { timeout: left() });
-      const html = await input.evaluate((ta, key) => {
+        return new RegExp(args.label).test(e.innerText?.replace(/\s+/g, "") ?? "") && getComputedStyle(e).visibility === "visible" && r.width >= 4 && r.height >= 4;
+      }), { label: SEND_LABEL, scope: SEND_CANDIDATES }, { timeout: left() });
+      step = "collect";
+      const html = await input.evaluate((ta, { key, scope }) => {
         const box = ta.closest("div.reply-box")!;
-        const candidates = [...box.querySelectorAll<HTMLElement>(".reply-footer button, .reply-footer div, .reply-footer span, .reply-footer [role=button]")].filter(e => {
+        const candidates = [...box.querySelectorAll<HTMLElement>(scope)].filter(e => {
           const r = e.getBoundingClientRect();
           return !!e.innerText?.trim() && getComputedStyle(e).visibility === "visible" && r.width >= 4 && r.height >= 4;
         });
@@ -87,22 +122,25 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
           area.append(clone);
         });
         return area.outerHTML;
-      }, nonce);
+      }, { key: nonce, scope: SEND_CANDIDATES });
+      step = "select";
       const selection = await selectSendControl(html, Math.max(1, deadline * 1000 - Date.now() - 1500));
       if ("error" in selection) return stop("pdd_send_control_unverified");
       const button = page.locator(`[data-claw-send-key="${nonce}-${selection.candidate}"]`);
+      step = "scroll";
       await button.scrollIntoViewIfNeeded({ timeout: left() });
       const before = blocked(); if (before) return stop(before);
       verifyAtPress = () => input.evaluate((ta, args) => {
         const keys = [...document.querySelectorAll("li.chat-item .chat-item-box.active[data-random]")].map(e => /^([0-9]{1,32})-/.exec(e.getAttribute("data-random") ?? "")?.[1]);
-        const target = document.querySelector(`[data-claw-send-key="${args.key}"]`);
-        const label = (target as HTMLElement | null)?.innerText?.replace(/\s+/g, "");
+        const target = document.querySelector<HTMLElement>(`[data-claw-send-key="${args.key}"]`);
+        const label = target?.innerText?.replace(/\s+/g, "");
         if (!keys.length || !keys.every(k => k === args.uid)) return "pdd_conversation_changed";
         if (Date.now() >= args.until) return "claim_expiring";
         if ((ta as HTMLTextAreaElement).disabled || (ta as HTMLTextAreaElement).readOnly) return "pdd_input_missing";
         if ((ta as HTMLTextAreaElement).value !== args.text) return "pdd_input_mismatch";
-        return target?.closest("div.reply-box") === ta.closest("div.reply-box") && /^(发送|Send)(\(?((Ctrl\+)?Enter|回车)\)?|↵)?$/.test(label ?? "") ? null : "pdd_send_control_unverified";
-      }, { uid, text, key: `${nonce}-${selection.candidate}`, until: deadline * 1000 - 1500 });
+        return target?.closest("div.reply-box") === ta.closest("div.reply-box") && !target.classList.contains("sendBtn_disabled") && new RegExp(args.label).test(label ?? "") ? null : "pdd_send_control_unverified";
+      }, { uid, text, key: `${nonce}-${selection.candidate}`, until: deadline * 1000 - 1500, label: SEND_LABEL });
+      step = "verify";
       const valid = await verifyAtPress();
       if (valid) return stop(valid);
       const point = await button.evaluate(el => {
@@ -117,6 +155,7 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
         return null;
       });
       // Playwright handles visibility/stability/hit testing. The transport permits one press only.
+      step = "click";
       await button.click({ timeout: left(), noWaitAfter: true, ...(point ? { position: point } : {}) });
       return { status: "dispatched" };
     };
@@ -124,6 +163,11 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
       timer = setTimeout(() => { active = false; connection?.close(); resolve(stop("claim_expiring")); }, Math.max(1, deadline * 1000 - Date.now() - 1000));
     })]);
   } catch (error) {
+    const kind = error instanceof errors.TimeoutError ? "timeout" : error instanceof Error && SAFE_ERRORS.has(error.message) ? error.message : "error";
+    const layout = !pressed && !wc.isDestroyed()
+      ? await Promise.race([wc.executeJavaScriptInIsolatedWorld(1001, [{ code: SEND_AREA_PROBE }]).catch(() => "probe_failed"), new Promise((r) => setTimeout(() => r("probe_timeout"), 500))])
+      : "-";
+    diagnose(`step=${step} error=${kind} ${typeof layout === "string" ? layout.slice(0, 300) : "probe_invalid"}`);
     return stop(pressed ? "pdd_playwright_click_uncertain" : blocked() ?? (deadlineBounded && error instanceof errors.TimeoutError ? "claim_expiring" : "pdd_send_button_not_ready"));
   } finally {
     active = false;

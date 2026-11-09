@@ -2027,7 +2027,8 @@ export class PddPageAdapter implements PlatformAdapter {
       const result = new Promise<SendResult>(resolve => {
         this.outgoing = { to_uid: uid, text, matched: null, blocked: 0, recheck, clicked: () => didPress, resolve: r => { observed = r; resolve(r); } };
       });
-      const click = await this.clickText(page.webContents, uid, text, deadline, recheck, value => { didPress = value; }, () => { didFill = true; });
+      const click = await this.clickText(page.webContents, uid, text, deadline, recheck, value => { didPress = value; }, () => { didFill = true; },
+        detail => console.log(`[${this.shopId}] platform send click failed ${detail}`));
       if (click.status !== "dispatched") {
         if (didPress && observed && (observed as SendResult).status === "confirmed") return observed;
         if (click.status === "not_sent" && didFill && this.window === page && this.watchEpoch === epoch) {

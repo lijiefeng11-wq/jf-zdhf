@@ -50,7 +50,7 @@ def select(raw):
                     (node.attrib.get("role") or "").lower() == "button" or node.attrib.get("data-claw-send-control") == "true"):
                 continue
             label = re.sub(r"\s+", "", node.get_all_text(strip=True))
-            if not re.fullmatch(r"(发送|Send)(\(?((Ctrl\+)?Enter|回车)\)?|↵)?", label):
+            if not re.fullmatch(r"(发送|Send)(\(?((Ctrl\+)?Enter|回车)\)?|↵)?|坚持发送", label):
                 continue
             cid = node.attrib.get("data-claw-candidate", "")
             if not re.fullmatch(r"[0-9]+", cid) or int(cid) > 100:

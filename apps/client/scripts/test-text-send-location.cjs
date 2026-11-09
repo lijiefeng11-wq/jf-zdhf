@@ -15,7 +15,9 @@ const results = [];
 const watchdog = setTimeout(() => app.exit(2), 45_000);
 
 function html(s) {
-  const button = `<div class="${s.renamed ? 'new-send-control' : 'send-btn'}" onclick="clicks++"><span>发送${s.hint ? '(Enter)' : ''}</span></div>`;
+  const button = `<div class="${s.renamed ? 'new-send-control' : 'send-btn'}" onclick="clicks++"><span>${s.label || "发送"}${s.hint ? '(Enter)' : ''}</span></div>`;
+  // 平台“推荐话术”形态：底栏被 v-show 隐藏，回复框里另有一个发送按钮（加载中带 sendBtn_disabled）。
+  const gpt = s.gpt ? `<div class="send-btn${s.gptDisabled ? " sendBtn_disabled" : ""}" onclick="clicks++">发送</div><div class="gpt-suggest">虚构推荐话术</div>` : "";
   return `<!doctype html><meta charset="utf-8"><style>
     body{margin:0} .reply-box{position:absolute;left:120px;top:100px;width:300px}
     textarea{width:200px;height:60px} .reply-footer{position:relative}
@@ -24,8 +26,8 @@ function html(s) {
     <ul><li class="chat-item"><div class="chat-item-box active" data-random="${s.otherBuyer ? "9002" : "9001"}-fixture"></div></li></ul>
     ${s.offscreenDuplicate ? '<div class="reply-box" style="left:-1200px"><div class="reply-footer">' + button + '</div></div>' : ""}
     <div class="reply-box" id="composer"><div class="reply-input"><textarea>${s.existingDraft ? '虚构回复' : ''}</textarea></div>
-      <div class="reply-footer">${s.hiddenDuplicate ? '<div class="send-btn" style="display:none"></div>' : ""}
-      ${s.insertDelay ? "" : button}${s.ambiguous ? button : ""}</div></div>
+      <div class="reply-footer"${s.gpt ? ' style="display:none"' : ""}>${s.hiddenDuplicate ? '<div class="send-btn" style="display:none"></div>' : ""}
+      ${s.insertDelay ? "" : button}${s.ambiguous ? button : ""}</div>${gpt}</div>
     ${s.mask ? '<div style="position:fixed;inset:0;background:#fff;z-index:10"></div>' : ""}
     <script>window.clicks=0;${s.changeDraft ? 'document.querySelector("textarea").addEventListener("input",e=>{if(e.target.value)e.target.value="人工草稿"})' : ""}
     ${s.revealButton ? 'document.querySelector("textarea").addEventListener("input",()=>{document.querySelector("#composer .send-btn").style.visibility="visible"})' : ""}
@@ -61,6 +63,9 @@ app.whenReady().then(async () => {
     { name: "offscreen_button_in_other_composer", offscreenDuplicate: true, status: "confirmed" },
     { name: "partly_clipped_button", css: "#composer{left:-80px}", status: "confirmed" },
     { name: "center_covered_but_same_button_has_clear_point", css: ".reply-footer::after{content:'';position:absolute;left:40px;top:0;width:20px;height:40px;background:#fff;z-index:1}", status: "confirmed" },
+    { name: "insist_send_label", label: "坚持发送", status: "confirmed" },
+    { name: "gpt_suggest_hides_footer_uses_its_send_button", gpt: true, status: "confirmed" },
+    { name: "gpt_suggest_send_button_loading_is_not_clicked", gpt: true, gptDisabled: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
     { name: "zoom80", zoom: 0.8, status: "confirmed" },
     { name: "fully_covered", mask: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
     { name: "two_visible_buttons_are_ambiguous", ambiguous: true, status: "not_sent", reason: "pdd_send_control_unverified" },
