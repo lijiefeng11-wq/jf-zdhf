@@ -220,7 +220,6 @@ app.whenReady().then(async () => {
         result = await adapter.send({ conversation_id: '9001', text: '虚构回复', attempt_id: 'fixture-only', deadline, recheck: () => s.recheck || (s.atPress === 'observe' && pressBoundary ? 'shop_observe_only' : null) });
       } finally { console.log = originalLog; }
       const elapsed = Date.now() - started;
-      if (s.status === 'confirmed') await until(() => wc.executeJavaScript('document.querySelectorAll(".agent-message").length===1'));
       // 已返回结果后继续观察一次，确保 unknown 和被阻止的发送没有异步重试。
       await sleep(80);
       if (s.watchdog) {
@@ -231,6 +230,7 @@ app.whenReady().then(async () => {
       const enters = await wc.executeJavaScript('window.enters');
       try {
         assert.equal(result.status, s.status);
+        if (s.status === 'confirmed') await until(() => wc.executeJavaScript('document.querySelectorAll(".agent-message").length===1'));
         if (s.reason) assert.equal(result.reason, s.reason);
         const sent = s.status === 'confirmed' || s.noId;
         const expectedCommands = sent ? ['mousePressed', 'mouseReleased'] : s.rejectPress || s.hangPress ? ['mousePressed'] : [];
@@ -265,7 +265,7 @@ app.whenReady().then(async () => {
         if (s.neverReveal) assert.ok(elapsed < 3000, "等待必须有界");
         results.push({ name: s.name, ok: true, result, clicks, enters, commands, requests: received.length, network, elapsed });
       } catch (error) {
-        results.push({ name: s.name, ok: false, result, clicks, enters, commands, received, network, pressBoundary, verifications, error: error.message });
+        results.push({ name: s.name, ok: false, result, clicks, enters, commands, received, network, logs, pressBoundary, verifications, error: error.message });
       } finally {
         console.log('send_location_scenario ' + JSON.stringify(results.at(-1)));
         wc.debugger.removeAllListeners('message');
