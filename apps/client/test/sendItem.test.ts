@@ -233,19 +233,40 @@ describe("附加发送：候选字段", () => {
     }
   });
 
-  test("候选变化使版本递增，旧决定失效", async () => {
-    const fake = fakeBackend({ decide: pick("goods_card") });
+  test("候选变化只使旧的 send_item 决定失效（不递增版本），对象仍在候选中也不 claim", async () => {
+    for (const changed of [OPTIONS.slice(0, 1), OPTIONS.slice(0, 2)]) {
+      const fake = fakeBackend({ decide: pick("goods_card") });
+      const h = await shop(fake);
+      fake.state.hold = true;
+      h.mock.injectSendOptions("buyer-1", OPTIONS);
+      h.mock.injectBuyerMessage({ conversation_id: "buyer-1", content: "看看商品" });
+      await waitFor(() => fake.state.bodies.length === 1, "submit");
+      const revision = fake.state.bodies[0].context_revision;
+      h.mock.injectSendOptions("buyer-1", changed);
+      fake.state.hold = false;
+      await waitFor(() => eventsOf(h.rt).some((e) => e.snapshot?.state === "ready"), "decision");
+      await settle(h.rt);
+      assert.equal(fake.state.claims.length, 0);
+      assert.equal(eventsOf(h.rt)[0].blocked, "send_options_changed");
+      assert.equal(h.rt.journal.conversation("buyer-1").revision, revision);
+      await h.rt.stop(false);
+      running.splice(running.indexOf(h.rt), 1);
+    }
+  });
+
+  test("候选在判断期间变化：已就绪的文字回复照常发送", async () => {
+    const fake = fakeBackend({ decide: () => ({ action: "reply", text: "虚构回复" }) });
     const h = await shop(fake);
     fake.state.hold = true;
-    h.mock.injectSendOptions("buyer-1", OPTIONS);
-    h.mock.injectBuyerMessage({ conversation_id: "buyer-1", content: "看看商品" });
-    await waitFor(() => fake.state.bodies.length === 1, "submit");
     h.mock.injectSendOptions("buyer-1", OPTIONS.slice(0, 1));
+    h.mock.injectBuyerMessage({ conversation_id: "buyer-1", content: "在吗" });
+    await waitFor(() => fake.state.bodies.length === 1, "submit");
+    h.mock.injectSendOptions("buyer-1", OPTIONS);
     fake.state.hold = false;
-    await waitFor(() => eventsOf(h.rt).some((e) => e.snapshot?.state === "ready"), "decision");
-    await settle(h.rt);
-    assert.equal(fake.state.claims.length, 0);
-    assert.equal(eventsOf(h.rt)[0].blocked, "superseded");
+    await waitFor(() => fake.state.receipts.length >= 1, "receipt");
+    assert.equal(fake.state.receipts[0].status, "sent");
+    assert.deepEqual(h.mock.platformSends.map((r) => r.text), ["虚构回复"]);
+    assert.equal(eventsOf(h.rt)[0].blocked ?? null, null);
   });
 });
 

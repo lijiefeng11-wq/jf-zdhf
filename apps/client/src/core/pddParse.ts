@@ -93,6 +93,13 @@ export function remarkCard(m: Record<string, unknown>): Card | null {
   return { type: "order", title: REMARK_CARD_TITLE, ...(remarks ? { fields: [{ label: "备注内容", value: remarks }] } : {}) };
 }
 
+/** 订单类卡片（备注确认、售后申请）的可读 content。 */
+function orderCardText(card: Card): string {
+  if (card.title === REMARK_CARD_TITLE) return `${REMARK_CARD_TITLE}：备注内容 ${card.fields?.[0]?.value ?? "（未读到）"}`;
+  const fields = (card.fields ?? []).map((f) => `${f.label} ${f.value}`).join("；");
+  return `${card.title ?? "订单卡片"}${fields ? `：${fields}` : ""}`;
+}
+
 /** 图片消息（type=1）：info.image_url 为平台图片地址，content 通常是同一地址。只取 https 地址。 */
 export function imageRef(m: Record<string, unknown>): string | null {
   if (m.type !== 1) return null;
@@ -103,13 +110,74 @@ export function imageRef(m: Record<string, unknown>): string | null {
   return null;
 }
 
+/** 平台按文字展示的 type 0 模板：买家点了店铺常见问题、店铺自动答复、商家通知（如退货地址说明），content 即正文。 */
+const TEXT_TEMPLATES = new Set(["mall_faq_question", "mall_answer_with_text", "merchant_note"]);
+
+export const AFTER_SALE_CARD_TITLE = "消费者申请售后";
+const AFTER_SALE_FIELDS = ["申请类型", "申请原因", "退款金额", "申请说明"];
+
+/**
+ * 买家提交售后申请后平台生成的卡片（type 64，模板 apply_for_consultation_card_new）：info.data.apply_info 为 {label,value}。
+ * 按买家的订单卡片提交，只收申请类型/原因/金额/说明与商品名；联系方式与凭证不收，说明先隐去手机号、地址。卡片上的“去处理”从不点击。
+ */
+export function afterSaleCard(m: Record<string, unknown>): Card | null {
+  if (m.type !== 64 || m.template_name !== "apply_for_consultation_card_new") return null;
+  const data = obj(obj(m.info)?.data);
+  const fields: { label: string; value: string }[] = [];
+  for (const raw of Array.isArray(data?.apply_info) ? data.apply_info : []) {
+    const f = obj(raw);
+    const label = typeof f?.label === "string" ? f.label.trim() : "";
+    if (!AFTER_SALE_FIELDS.includes(label) || fields.some((x) => x.label === label)) continue;
+    const value = cardText(typeof f?.value === "string" ? redactText(f.value) : undefined, 200);
+    if (value) fields.push({ label, value });
+  }
+  const goods = cardText(obj(data?.goods_info)?.goods_name, 200);
+  if (goods) fields.push({ label: "商品", value: goods });
+  const description = cardText(data?.title, 4000) ?? cardText(m.content, 4000);
+  return { type: "order", title: AFTER_SALE_CARD_TITLE, ...(description ? { description } : {}), ...(fields.length ? { fields } : {}) };
+}
+
+/**
+ * 平台发给商家的提示（买家看不到，按契约 role=system、kind=card、type=system）：
+ * - type 8：售后/纠纷预警（aftersales_hosting_warning_card、dispute_warning），info.title 与 info.text_list；
+ * - type 24：平台系统消息（如撤回提示），取 content；
+ * - type 51：平台相似商品推荐卡片。
+ * 后两种暂无抓包样本，只取可读文字，取不到时给固定描述。
+ */
+export function noticeCard(m: Record<string, unknown>): Card | null {
+  const info = obj(m.info);
+  if (m.type === 8) {
+    const lines = (Array.isArray(info?.text_list) ? info.text_list : []).flat().map((t) => cardText(obj(t)?.text, 4000)).filter((t): t is string => !!t);
+    const description = lines.join(" ").slice(0, 4000);
+    return { type: "system", title: cardText(info?.title, 500) ?? cardText(m.content, 500) ?? "平台售后提示", ...(description ? { description } : {}) };
+  }
+  if (m.type === 24) return { type: "system", title: cardText(m.content, 500) ?? "平台系统消息" };
+  if (m.type === 51) return { type: "system", title: "平台相似商品推荐卡片" };
+  return null;
+}
+
+/** 店铺自动发出的常见问题菜单（type 56，模板 rich_text_faq_list）：info.content[] 的说明文字与可点问题，按客服文字提交。 */
+export function faqListText(m: Record<string, unknown>): string | null {
+  if (m.type !== 56) return null;
+  const parts = Array.isArray(obj(m.info)?.content) ? (obj(m.info)!.content as unknown[]) : [];
+  const texts: string[] = [], menu: string[] = [];
+  for (const raw of parts) {
+    const p = obj(raw);
+    const t = cardText(p?.text, 500);
+    if (t) (p?.type === "menu_item" ? menu : texts).push(t);
+  }
+  if (!texts.length && !menu.length) return null;
+  return `[常见问题列表] ${texts.join(" ")}${menu.length ? `${texts.length ? " " : ""}可点问题：${menu.join(" / ")}` : ""}`.slice(0, 2000);
+}
+
 function kindOf(m: Record<string, unknown>): { kind: Kind; placeholder: string | null } {
   const template = typeof m.template_name === "string" ? m.template_name : "";
   if (m.type === 1) return { kind: "image", placeholder: "[图片]" };
   if (/goods(_info)?_card/.test(template)) return { kind: "card", placeholder: "商品卡片" };
+  if (m.type === 14) return { kind: "unsupported", placeholder: "[视频]" };
   if (m.type === 0) {
     const content = typeof m.content === "string" ? m.content.trim() : "";
-    const textTemplate = !template || /_text_msg$/.test(template);
+    const textTemplate = !template || /_text_msg$/.test(template) || TEXT_TEMPLATES.has(template);
     if (textTemplate && m.info === undefined && content && !/^https?:\/\/\S+$/i.test(content)) return { kind: "text", placeholder: null };
     if (/^https?:\/\/\S+$/i.test(content)) return { kind: "unsupported", placeholder: "链接/图片（类型 0）" };
   }
@@ -181,12 +249,14 @@ export function parseChatList(requestBody: unknown, responseBody: unknown, shopI
       skipped += 1;
       continue;
     }
-    const source = sourceCard(m);
-    const remark = source ? null : remarkCard(m);
-    const remarkText = remark ? `${REMARK_CARD_TITLE}：备注内容 ${remark.fields?.[0]?.value ?? "（未读到）"}` : null;
-    const { kind, placeholder } = source ? { kind: "card" as const, placeholder: source } : remarkText ? { kind: "card" as const, placeholder: remarkText } : kindOf(m);
+    const notice = noticeCard(m);
+    const source = notice?.title ?? sourceCard(m);
+    const remark = source ? null : remarkCard(m) ?? afterSaleCard(m);
+    const faq = faqListText(m);
+    const { kind, placeholder } = source ? { kind: "card" as const, placeholder: source } : remark ? { kind: "card" as const, placeholder: orderCardText(remark) } :
+      faq ? { kind: "text" as const, placeholder: faq } : kindOf(m);
     const goods = source || remark ? null : goodsCard(m);
-    const card: Card | null = source ? { type: m.type === 31 ? "system" : "source", title: source } : remark ?? goods;
+    const card: Card | null = notice ?? (source ? { type: m.type === 31 ? "system" : "source", title: source } : remark ?? goods);
     if (card && shopId && (goods || card.type === "source")) {
       const info = obj(m.info), nested = obj(info?.goods_info);
       const ids = [info?.goodsID, info?.goodsId, nested?.goods_id].filter(v => v !== undefined && v !== null);

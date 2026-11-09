@@ -24,6 +24,8 @@ export const MANUAL_DISMISS_LABELS = ["关闭", "取消", "暂不", "我再想�
 /** 浮层文字含这些内容时不自动处理，留给人工。 */
 export const POPUP_RISKY = "协议|同意|授权|支付|付款|扣款|保证金|提现|违规|处罚|罚款|扣分|封禁|冻结|申诉|注销";
 /** 业务区域：其内的元素、包含它们的浮层都不处理。 */
+/** 类名明显是引导、公告、活动的浮层（自动清理可点其关闭图标）。installerContact 是平台“联系安装师傅”的纯图片引导，关闭只是隐藏、7 天显示一次，会挡住输入区的视频入口。 */
+export const POPUP_GUIDE = "guide|tour|intro|novice|newbie|onboard|announce|advert|promot|activity|upgrade|spotlight|coach|feature|notice-pop|ad-pop|adpop|installerContact";
 export const POPUP_SKIP =
   "div.reply-box, ul.msg-list, li.chat-item, .chat-list, textarea, [contenteditable=true], input[type=text], input[type=search], input:not([type]), div.el-dialog.goods-desc-modal-part-dialog, ul.video-list-box";
 
@@ -37,7 +39,7 @@ export function popupSweepScript(mode: PopupSweepMode, deadline: number): string
   const LABELS = new Set(${JSON.stringify(labels)});
   const RISKY = new RegExp(${JSON.stringify(POPUP_RISKY)});
   const SKIP = ${JSON.stringify(POPUP_SKIP)};
-  const GUIDE = /guide|tour|intro|novice|newbie|onboard|announce|advert|promot|activity|upgrade|spotlight|coach|feature|notice-pop|ad-pop|adpop/i;
+  const GUIDE = new RegExp(${JSON.stringify(POPUP_GUIDE)}, "i");
   const state = (window.__clawPopups ??= { tries: new WeakMap() });
   const vw = innerWidth, vh = innerHeight;
   const cls = (el) => (typeof el.className === "string" ? el.className : el.getAttribute?.("class") || "").trim();
