@@ -538,7 +538,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) in (4, 5) and parts[2] == "events" and identifier(parts[3]):
             if len(parts) == 4 and method == "GET":
                 return self._send(200, store.get(identity, parts[3]))
-            if len(parts) == 5 and method == "POST" and parts[4] in ("claim", "receipt", "cancel"):
+            if len(parts) == 5 and method == "POST" and parts[4] in ("claim", "receipt", "cancel", "timeout_transfer"):
                 action = getattr(store, parts[4])
                 value = action(identity, parts[3], self._json())
                 if parts[4] == "cancel":
@@ -550,7 +550,7 @@ class Handler(BaseHTTPRequestHandler):
         started = time.monotonic()
         self.response_status = None
         words = {"api", "v1", "admin", "events", "shops", "model", "test", "login", "logout",
-                 "password", "summary", "settings", "heartbeat", "me", "claim", "receipt", "cancel", "verify", "health"}
+                 "password", "summary", "settings", "heartbeat", "me", "claim", "receipt", "cancel", "timeout_transfer", "verify", "health"}
         route = "/".join(part if part in words else "*" for part in urlsplit(self.path).path.split("/")[:8])
         with diagnostics.scope(self.server.diagnostics, request_id=uuid.uuid4().hex, route=route, method=self.command):
             try:

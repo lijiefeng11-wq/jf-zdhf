@@ -70,6 +70,31 @@ class DeadlineHttpTests(unittest.TestCase):
             return value if value["state"] == "ready" else None
         return self.wait_for(read)
 
+    def test_timeout_transfer_http_stops_slow_model_on_original_event(self):
+        settings = {"enabled": True, "mode": "model", "rules": [], "system_prompt": "Fictional",
+                    "fallback": {"model_timeout": {"action": "transfer", "account": "fictional-agent"}}}
+        self.server.store.update_settings("demo", settings)
+        self.request("POST", "/api/v1/heartbeat", {"instance_id": "i", "session_id": "s",
+                     "capabilities": ["reply_deadline", "reply_timeout_transfer", "transfer_by_account"]})
+        self.provider.queue(timeout(delay=5))
+        payload = {**self.payload(budget=60000), "timeout_transfer": True}
+        self.assertEqual(self.request("POST", "/api/v1/events", payload)[0], 202)
+        self.wait_for(lambda: self.provider.count() == 1)
+        owner = {k: self.lease[k] for k in ("instance_id", "session_id", "generation")}
+        code, snap = self.request("POST", "/api/v1/events/e1/timeout_transfer", {**owner, "remaining_budget_ms": 15000})
+        self.assertEqual(code, 200)
+        self.assertEqual(snap["event_id"], "e1")
+        self.assertEqual(snap["decision"]["transfer"]["account"], "fictional-agent")
+        self.wait_for(lambda: not self.server.model_workers)
+        claimed = self.request("POST", "/api/v1/events/e1/claim", {**owner, "attempt_id": "attempt"})[1]
+        self.assertEqual(claimed["decision"]["action"], "transfer")
+        code, snap = self.request("POST", "/api/v1/events/e1/receipt", {"attempt_id": "attempt", "status": "unknown",
+                                  "steps": [{"step": "transfer", "status": "unknown"}]})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.request("POST", "/api/v1/events/e1/timeout_transfer",
+                         {**owner, "attempt_id": "attempt", "remaining_budget_ms": 15000})[0], 409)
+        self.assertEqual(self.request("GET", "/api/v1/events/e1")[1]["delivery"]["status"], "unknown")
+
     def test_zero_budget_no_model_no_attempt_and_read_only_cancel(self):
         code, snapshot = self.request("POST", "/api/v1/events", self.payload(budget=0))
         self.assertEqual(code, 202)

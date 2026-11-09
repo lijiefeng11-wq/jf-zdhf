@@ -2,13 +2,15 @@
 import math
 
 CAPABILITY = "reply_deadline"
+TRANSFER_CAPABILITY = "reply_timeout_transfer"
+TRANSFER_RESERVE = 15
 REASON = "reply_deadline_exceeded"
 TIMING_INTS = ("queue_wait_ms", "decision_ms", "primary_ms", "backup_ms")
 TIMING_FAILURES = ("deadline_exceeded", "cancelled", "model_unavailable", "model_invalid_output", "internal_error")
 
 
-def valid_budget(value):
-    return type(value) is int and 0 <= value <= 20000
+def valid_budget(value, timeout_transfer=False):
+    return type(value) is int and 0 <= value <= (60000 if timeout_transfer else 20000)
 
 
 def finite(value):
