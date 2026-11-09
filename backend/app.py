@@ -414,7 +414,30 @@ class Handler(BaseHTTPRequestHandler):
                                           "backup": self.server.backups.snapshot()}
                 return self._send(200, summary)
             if path == "/api/v1/admin/shops" and method == "GET":
-                return self._send(200, {"shops": store.shops(), "templates": store.reply_templates()})
+                with store.lock:
+                    shops = store.shops()
+                    models = store.model_config(self.server.config.get("model", {}))
+                    for shop in shops:
+                        settings = shop["settings"]
+                        configured = shop["shop_id"] in self.server.config.get("conversation_brain", [])
+                        brain = configured and settings["mode"] != "rules"
+                        preferred = self.server.config.get("brain_primary_slot", "primary") if brain else "primary"
+                        order = (preferred, "backup" if preferred == "primary" else "primary")
+                        shop["decision_runtime"] = {
+                            "brain_configured": configured,
+                            "mode": "conversation_brain" if brain else ("rules" if settings["mode"] == "rules" else "legacy"),
+                            "enabled": settings["enabled"],
+                            "persistent_memory": brain,
+                            "total_budget_seconds": 20 if brain else None,
+                            "models": [] if settings["mode"] == "rules" else [{
+                                "slot": name, "model": models[name].get("model", ""),
+                                "configured": modelconfig.slot_configured(models[name]),
+                                "timeout_seconds": self.server.config.get("brain_request_timeout_seconds", models[name]["timeout_seconds"])
+                                if brain else models[name]["timeout_seconds"],
+                            } for name in order],
+                        }
+                    templates = store.reply_templates()
+                return self._send(200, {"shops": shops, "templates": templates})
             if path == "/api/v1/admin/reply-templates" and method == "POST":
                 return self._send(201, store.create_reply_template(self._json()))
             if len(parts) == 5 and parts[3] == "reply-templates" and method == "PUT":

@@ -138,6 +138,44 @@ class ModelSettingsTests(unittest.TestCase):
                             {"slot": slot, "version": self.get_config()["version"] if version is None else version},
                             token=self.token)
 
+    def test_shop_runtime_reports_effective_order_without_secrets(self):
+        status, _ = self.save(
+            self.slot_payload(self.primary, model="local-model", timeout=8, api_key=SAVED_KEY),
+            self.slot_payload(self.backup, model="cloud-model", timeout=6))
+        self.assertEqual(status, 200)
+        self.server.config.update(conversation_brain=["demo"], brain_primary_slot="backup",
+                                  brain_request_timeout_seconds=15)
+        store = self.server.store
+        settings = store.shops()[0]["settings"]
+        store.update_settings("demo", {**settings, "mode": "hybrid", "enabled": True})
+        status, body = self.request(path="/api/v1/admin/shops", token=self.token)
+        self.assertEqual(status, 200)
+        runtime = body["shops"][0]["decision_runtime"]
+        self.assertEqual(runtime["mode"], "conversation_brain")
+        self.assertTrue(runtime["persistent_memory"])
+        self.assertEqual(runtime["total_budget_seconds"], 20)
+        self.assertEqual([m["slot"] for m in runtime["models"]], ["backup", "primary"])
+        self.assertEqual([m["model"] for m in runtime["models"]], ["cloud-model", "local-model"])
+        self.assertEqual([m["timeout_seconds"] for m in runtime["models"]], [15, 15])
+        self.assertNotIn(SAVED_KEY, json.dumps(body))
+        for model in runtime["models"]:
+            self.assertEqual(set(model), {"slot", "model", "configured", "timeout_seconds"})
+        self.server.config["conversation_brain"] = []
+        runtime = self.request(path="/api/v1/admin/shops", token=self.token)[1]["shops"][0]["decision_runtime"]
+        self.assertEqual(runtime["mode"], "legacy")
+        self.assertFalse(runtime["persistent_memory"])
+        self.assertEqual([m["timeout_seconds"] for m in runtime["models"]], [8, 6])
+        self.server.config["conversation_brain"] = ["demo"]
+        store.update_settings("demo", {**store.shops()[0]["settings"], "mode": "rules", "enabled": False})
+        runtime = self.request(path="/api/v1/admin/shops", token=self.token)[1]["shops"][0]["decision_runtime"]
+        self.assertEqual(runtime["mode"], "rules")
+        self.assertTrue(runtime["brain_configured"])
+        self.assertFalse(runtime["enabled"])
+        self.assertFalse(runtime["persistent_memory"])
+        self.assertEqual(runtime["models"], [])
+        for token, expected in ((None, 401), (CLIENT_TOKEN, 403)):
+            self.assertEqual(self.request(path="/api/v1/admin/shops", token=token)[0], expected)
+
     # -- GET / auth ------------------------------------------------------
     def test_auth_required_and_client_token_forbidden(self):
         for token in (None, "", CLIENT_TOKEN, "z" * 40):

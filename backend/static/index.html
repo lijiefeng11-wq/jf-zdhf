@@ -22,7 +22,7 @@
           <h1 id="login-title">管理后台登录</h1>
         </div>
       </div>
-      <p class="login-sub">独立演示后台。登录状态仅保存在当前页面内存中，刷新后需要重新登录。</p>
+      <p class="login-sub">独立决策后台。登录状态仅保存在当前页面内存中，刷新后需要重新登录。</p>
       <p class="login-hint">初始账号：<strong>admin</strong> / <strong>admin</strong>。首次登录必须先修改密码，才能进入管理后台。</p>
       <form id="login-form" class="login-form" autocomplete="on" novalidate>
         <label class="field">
@@ -41,7 +41,7 @@
       </form>
       <p id="login-notice" class="login-notice" role="status" hidden></p>
       <p id="login-error" class="error-text" role="alert" hidden></p>
-      <p class="login-foot">协议 v1.0 · 仅与同源后端通信 · 演示环境</p>
+      <p class="login-foot">协议 v1.0 · 仅与同源后端通信</p>
     </section>
   </div>
 
@@ -88,8 +88,8 @@
       </nav>
 
       <div class="sidebar-foot">
-        <span class="demo-badge">演示环境</span>
-        <span class="sidebar-foot-note">未接入平台登录与真实发送</span>
+        <span class="demo-badge">决策后台</span>
+        <span class="sidebar-foot-note">平台登录与发送由客户端执行</span>
       </div>
     </aside>
 
@@ -123,7 +123,7 @@
               刷新
             </button>
           </div>
-          <p id="notice" class="demo-note">演示环境：后台只做规则与模型判断，实际登录与收发由客户端完成，尚未接入真实店铺。</p>
+          <p id="notice" class="demo-note">后台负责理解消息、生成决策；平台登录、消息收发由客户端完成。各店铺当前决策流程与优先模型见下方。</p>
 
           <section class="card summary-card" aria-labelledby="summary-title">
             <div class="section-head">
@@ -233,6 +233,12 @@
               </details>
             </div>
 
+            <section class="settings-group" aria-labelledby="shop-decision-title">
+              <h3 id="shop-decision-title" class="section-title">当前决策流程</h3>
+              <dl id="shop-decision-runtime" class="detail-list"><div><dt>运行状态</dt><dd>尚未加载</dd></div></dl>
+              <p class="field-help">显示后台已生效的配置。未保存的表单修改不会改变这里；客户端是否自动发送仍由客户端授权决定。</p>
+            </section>
+
             <form id="settings-form" class="settings-form" novalidate>
               <fieldset class="settings-group"><legend>使用的话术模版</legend>
               <div class="form-actions">
@@ -336,13 +342,13 @@
                       <option value="hybrid">混合：按语义匹配规则</option>
                     </select>
                   </label>
-                  <p id="mode-help" class="field-help">按规则：只做包含匹配，未命中转人工，不调用模型。混合：先匹配规则，未命中时由模型理解意思；语义命中使用规则原文，否则由模型回复。模型方式直接交模型判断。</p>
+                  <p id="mode-help" class="field-help">按规则：只做包含匹配，未命中转人工，不调用模型。混合：由模型理解意图并选择适用的固定规则，选中后使用原文，否则自行回复。模型方式不使用固定规则。已启用新决策模式的店铺会按需查询资料并保存会话记忆；当前是否生效见“店铺配置”。</p>
                   <details class="help-box">
                     <summary>三种方式分别影响哪些字段</summary>
                     <dl class="help-list">
                       <div><dt>按规则</dt><dd>只用下面的“自动回复规则”，关键词匹配不到就转人工。此时“模型提示词”填了也不生效，因为完全不调用模型。</dd></div>
                       <div><dt>按模型</dt><dd>把“模型提示词”和买家消息交给模型；“自动回复规则”不参与判断，保留着也不会命中。</dd></div>
-                      <div><dt>混合</dt><dd>先用关键词匹配规则；没匹配到时，把每条规则的“适用问题说明”交给模型挑；挑中了发规则原文，没挑中才由模型自己组织回复。</dd></div>
+                      <div><dt>混合</dt><dd>由模型结合上下文判断规则是否适用；选中后发固定原文，否则自行回复或转人工。新模式还会按需查询资料，利用有来源的持久记忆。</dd></div>
                       <div><dt>示例写法</dt><dd>样式、材质、安装、退换以已确认内容为准；未确认先询问或转人工。</dd></div>
                       <div><dt>必填</dt><dd>必填，只能在这三项里选一个。</dd></div>
                       <div><dt>留空</dt><dd>不允许。没有选就保存会被拒绝。</dd></div>
@@ -436,7 +442,7 @@
               </details>
               <details id="template-rules-section" class="settings-group rules-group">
                 <summary>自动回复规则<span id="template-rules-summary" class="small muted"></span></summary>
-                <p class="field-help">关键词从上到下匹配。混合方式还会根据适用问题说明理解意思，命中后使用规则回复原文；实际发送由客户端核验后执行。</p>
+                <p class="field-help">纯规则方式按关键词从上到下匹配；混合方式由模型结合上下文和适用问题选择规则，命中后使用规则回复原文。实际发送由客户端核验后执行。</p>
                 <details class="help-box">
                   <summary>规则和提示词有什么区别，每条规则怎么填</summary>
                   <dl class="help-list">
@@ -444,7 +450,7 @@
                     <div><dt>怎么填</dt><dd>关键词写买家原话里最可能出现的词，越具体越好；回复写可以直接发出去的话。排在上面的规则先匹配。</dd></div>
                     <div><dt>示例写法</dt><dd>关键词“材质”，回复“请问您咨询哪一款？我先帮您核对材质。”这是写法示例，请按实际业务修改。</dd></div>
                     <div><dt>必填</dt><dd>规则整体可以不填（0 条）。每条规则的关键词必填，回复文字或发送条目至少填一个。</dd></div>
-                    <div><dt>留空</dt><dd>按规则方式下没有规则时全部转人工；按模型方式下规则不参与；混合方式下规则没命中才交模型。</dd></div>
+                    <div><dt>留空</dt><dd>按规则方式下没有规则时全部转人工；按模型方式下规则不参与；混合方式由模型理解意图，没有适用规则时按提示词判断。</dd></div>
                     <div><dt>注意</dt><dd>关键词是“包含”匹配，不懂同义词；只匹配最新一条买家文字消息，图片等非文字消息匹配不到。</dd></div>
                     <div><dt>序号与顺序</dt><dd>规则编号由页面自动生成；新增规则排在最后。发送条目来自当前会话候选，名称筛选应使用前台已有的名称。</dd></div>
                   </dl>
@@ -572,7 +578,7 @@
           <div class="page-head">
             <div>
               <h2 id="model-title" class="page-title">模型配置</h2>
-              <p class="page-sub">主模型优先调用，失败时自动切换备用一次；两者都失败则转人工。</p>
+              <p class="page-sub">先查看各店铺实际使用的决策流程，再管理两组模型连接配置。</p>
             </div>
             <span id="model-version" class="pill pill-muted" hidden></span>
           </div>
@@ -582,13 +588,20 @@
             用本地服务则不出本机。密钥只保存不回显，本页面不显示任何真实密钥示例。
           </p>
 
+          <section class="card" aria-labelledby="decision-runtime-title">
+            <div class="section-head"><h3 id="decision-runtime-title" class="section-title">各店铺当前决策流程</h3></div>
+            <div id="model-decision-runtime" class="shop-list"><p class="small muted">尚未加载运行配置。</p></div>
+            <p class="field-help">每 5 秒读取后台当前生效配置。新决策模式先理解意图，按需查询车型、商品和页面订单，并保存带买家原文来源的会话记忆。记忆不等于已核实订单或发送成功。</p>
+            <p class="field-help">调用顺序以这里为准，“主模型”和“备用模型”是下方两组配置的名称。新模式可优先使用备用模型；请求超时可由新模式单独设置，总预算到期后不再尝试另一模型。新模式启用范围和超时目前由后台部署配置管理。</p>
+          </section>
+
           <form id="model-form" class="settings-form" novalidate>
             <div class="model-slot-grid">
               <section class="card model-card model-slot" aria-labelledby="primary-slot-title">
                 <div class="section-head">
                   <div>
-                    <h3 id="primary-slot-title" class="section-title">主模型 · 本地</h3>
-                    <p class="section-sub">优先使用。本地服务可填 http://127.0.0.1:端口/v1。必须填写，留空则无法用模型判断。</p>
+                    <h3 id="primary-slot-title" class="section-title">主模型配置</h3>
+                    <p class="section-sub">传统流程优先使用；新模式的调用顺序见上方。提示词草稿仍使用本组配置。</p>
                   </div>
                   <span id="primary-key-status" class="badge badge-muted">未加载</span>
                 </div>
@@ -616,7 +629,7 @@
                     </label>
                   </div>
                   <p id="primary-slot-notes" class="field-help">
-                    模型名称和接口地址必须同时填写或同时留空，只填一个会被拒绝保存。超时填 1 到 60 的整数，默认 20 秒。
+                    模型名称和接口地址必须同时填写或同时留空，只填一个会被拒绝保存。本组超时填 1 到 60 的整数，默认 20 秒。新模式可覆盖此值，有效超时见上方运行配置。
                   </p>
 
                   <label class="field">
@@ -657,8 +670,8 @@
               <section class="card model-card model-slot" aria-labelledby="backup-slot-title">
                 <div class="section-head">
                   <div>
-                    <h3 id="backup-slot-title" class="section-title">备用模型 · DeepSeek</h3>
-                    <p class="section-sub">主模型不可用时自动尝试一次。可留空。</p>
+                    <h3 id="backup-slot-title" class="section-title">备用模型配置</h3>
+                    <p class="section-sub">新模式可优先使用本组配置；传统流程在主模型失败时尝试。可留空。</p>
                   </div>
                   <span id="backup-key-status" class="badge badge-muted">未加载</span>
                 </div>
@@ -685,7 +698,7 @@
                     </label>
                   </div>
                   <p id="backup-slot-notes" class="field-help">
-                    模型名称和接口地址必须同时填写或同时留空，只填一个会被拒绝保存。超时填 1 到 60 的整数，默认 20 秒。
+                    模型名称和接口地址必须同时填写或同时留空，只填一个会被拒绝保存。本组超时填 1 到 60 的整数，默认 20 秒。新模式可覆盖此值，有效超时见上方运行配置。
                   </p>
 
                   <label class="field">
@@ -709,13 +722,13 @@
                 <details class="help-box">
                   <summary>备用模型各项怎么填</summary>
                   <dl class="help-list">
-                    <div><dt>用途</dt><dd>主模型出错、超时或没返回可用结果时，后台自动再试备用模型一次。</dd></div>
+                    <div><dt>用途</dt><dd>传统流程在主模型失败后尝试本组配置；新模式可以优先使用本组，实际顺序和剩余预算以上方运行配置为准。</dd></div>
                     <div><dt>怎么填</dt><dd>接口地址、模型名称、超时的填法和主模型一样；公网地址必须是 https://。</dd></div>
                     <div><dt>示例</dt><dd>接口地址 https://api.deepseek.com/v1，模型名称 deepseek-flash，超时 20。</dd></div>
                     <div><dt>必填</dt><dd>选填。备用模型也失败时转人工，不会无限重试。</dd></div>
                     <div><dt>留空</dt><dd>允许：接口地址和模型名称都留空就不启用备用模型。只填其中一个会被拒绝保存。</dd></div>
                     <div><dt>密钥</dt><dd>由你自己在服务提供方处申请并填写。留空保留已保存的密钥，本页面不回显。</dd></div>
-                    <div><dt>外发提醒</dt><dd>启用后，主模型失败时店铺提示词和买家消息会发到这个地址，请确认是可信的服务。</dd></div>
+                    <div><dt>外发提醒</dt><dd>调用本组模型时，店铺提示词和买家消息会发到这个地址；新模式可直接优先调用，请确认是可信的服务。</dd></div>
                   </dl>
                 </details>
               </section>
@@ -816,11 +829,11 @@
               <li>后台按店铺保存规则、提示词与模型设置，生成回复建议。</li>
               <li>客户端负责平台登录、收发消息、保存完整上下文与执行发送。</li>
               <li>发送结果以客户端回执为准，不确定的结果永久保留，不自动重发。</li>
-              <li>当前没有备注、订单或库存写入能力；演示环境未接管真实店铺。</li>
+              <li>当前没有备注、订单或库存写入能力；是否自动发送以客户端授权和平台回执为准。</li>
             </ul>
           </section>
 
-          <p class="app-footer">Claw-Next 独立演示后台 · 协议 v1.0 · 仅与同源后端通信</p>
+          <p class="app-footer">Claw-Next 独立决策后台 · 协议 v1.0 · 仅与同源后端通信</p>
         </section>
       </main>
     </div>
