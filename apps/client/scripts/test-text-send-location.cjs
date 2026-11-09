@@ -25,9 +25,9 @@ async function until(check) {
 }
 
 function html(s) {
-  const button = `<div class="${s.renamed ? 'new-send-control' : 'send-btn'}" onclick="clicks++;sendFixture()"><span>${s.label || "发送"}${s.hint ? '(Enter)' : ''}</span></div>`;
+  const button = `<div class="${s.renamed ? 'new-send-control' : 'send-btn'}" onclick="trustedClicks.push(event.isTrusted);if(event.isTrusted){clicks++;sendFixture()}"><span>${s.label || "发送"}${s.hint ? '(Enter)' : ''}</span></div>`;
   // 平台“推荐话术”形态：底栏被 v-show 隐藏，回复框里另有一个发送按钮（加载中带 sendBtn_disabled）。
-  const gpt = s.gpt ? `<div class="send-btn${s.gptDisabled ? " sendBtn_disabled" : ""}" onclick="clicks++;sendFixture()">发送</div><div class="gpt-suggest">虚构推荐话术</div>` : "";
+  const gpt = s.gpt ? `<div class="send-btn${s.gptDisabled ? " sendBtn_disabled" : ""}" onclick="trustedClicks.push(event.isTrusted);if(event.isTrusted){clicks++;sendFixture()}">发送</div><div class="gpt-suggest">虚构推荐话术</div>` : "";
   return `<!doctype html><meta charset="utf-8"><style>
     body{margin:0} .reply-box{position:absolute;left:120px;top:100px;width:300px}
     textarea{width:200px;height:60px} .reply-footer{position:relative}
@@ -42,7 +42,10 @@ function html(s) {
     ${s.overlay ? '<div class="fullscreen-dialog-manager"><div class="el-dialog__wrapper full-screen-dialog-basic" tabindex="0" style="position:fixed;inset:0;background:#fff;z-index:10">' + (s.overlayContent ? '<div class="business-dialog" style="position:absolute;' + (s.centeredContent ? 'left:300px;top:250px;width:300px;height:160px;' : 'inset:0;') + (s.hiddenContent ? 'display:none;' : '') + '">虚构业务弹窗</div>' : '') + '</div></div>' : ''}
     <div id="messages"><div class="buyer-message" data-uid="9001">虚构买家提问</div></div>
     <script>
-    window.clicks=0;window.enters=[];window.sendErrors=[];
+    window.clicks=0;window.trustedClicks=[];window.enters=[];window.sendErrors=[];
+    ${s.displayPriority ? 'document.querySelector(".fullscreen-dialog-manager").style.setProperty("display","block","important")' : ''}
+    ${s.hiddenOverlay ? 'document.querySelector(".fullscreen-dialog-manager").style.display="none"' : ''}
+    window.originalSurface=[...document.querySelectorAll('.fullscreen-dialog-manager,.el-dialog__wrapper,body>div[style]')].map(el=>({el,display:el.style.getPropertyValue('display'),priority:el.style.getPropertyPriority('display')}));
     async function sendFixture(){
       const uid=/^([0-9]+)-/.exec(document.querySelector('.chat-item-box.active').dataset.random)[1];
       const text=document.querySelector('textarea').value;
@@ -88,25 +91,27 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 900, height: 700, webPreferences: { session: fixtureSession, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
   const wc = win.webContents;
   const nativeCommand = wc.debugger.sendCommand.bind(wc.debugger);
+  const nativeIsolatedWorld = wc.executeJavaScriptInIsolatedWorld.bind(wc);
   const scenarios = [
     { name: "below_viewport_scrolls_before_click", css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
+    { name: "below_viewport_arbitrary_mask_sends_after_scroll", mask: true, css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
     { name: "ancestor_clipping_scrolls_before_click", css: "#composer{height:70px;overflow:hidden}", status: "confirmed" },
     { name: "normal", status: "confirmed" },
-    { name: "fullscreen_overlay_enter_confirmed", overlay: true, status: "confirmed" },
-    { name: "fullscreen_suggestion_enter_confirmed", overlay: true, gpt: true, status: "confirmed" },
+    { name: "fullscreen_overlay_trusted_click_confirmed", overlay: true, status: "confirmed" },
+    { name: "fullscreen_suggestion_trusted_click_confirmed", overlay: true, gpt: true, status: "confirmed" },
     { name: "fullscreen_no_message_id_unknown_no_retry", overlay: true, noId: true, status: "unknown", reason: "platform_ack_without_message_id" },
-    { name: "fullscreen_focus_trap_stops", overlay: true, focusTrap: true, status: "not_sent", reason: "pdd_send_button_covered" },
-    { name: "fullscreen_focus_changes_at_key_guard", overlay: true, atKey: "focus", status: "not_sent", reason: "pdd_send_button_covered" },
-    { name: "fullscreen_uid_changes_at_key_guard", overlay: true, atKey: "uid", status: "not_sent", reason: "pdd_conversation_changed" },
-    { name: "fullscreen_draft_changes_at_key_guard", overlay: true, atKey: "draft", status: "not_sent", reason: "pdd_input_mismatch" },
-    { name: "fullscreen_observe_recheck_at_key_guard", overlay: true, atKey: "observe", status: "not_sent", reason: "shop_observe_only" },
-    { name: "fullscreen_page_changes_at_key_guard", overlay: true, atKey: "page", status: "not_sent", reason: "pdd_page_changed" },
-    { name: "fullscreen_deadline_expires_at_key_guard", overlay: true, atKey: "deadline", status: "not_sent", reason: "claim_expiring" },
-    { name: "fullscreen_button_hidden_at_key_guard", overlay: true, atKey: "hidden", status: "not_sent", reason: "pdd_send_control_unverified" },
-    { name: "fullscreen_button_disabled_at_key_guard", overlay: true, atKey: "disabled", status: "not_sent", reason: "pdd_send_control_unverified" },
-    { name: "fullscreen_native_mac_enter_refused", overlay: true, nativeMac: true, status: "not_sent", reason: "pdd_send_button_covered" },
-    { name: "fullscreen_enter_rejected_no_retry", overlay: true, rejectKey: true, status: "unknown", reason: "pdd_playwright_click_uncertain" },
-    { name: "fullscreen_enter_hangs_bounded_no_retry", overlay: true, hangKey: true, status: "unknown", reason: "pdd_playwright_click_uncertain" },
+    { name: "fullscreen_focus_trap_sends_and_restores_inert", overlay: true, focusTrap: true, status: "confirmed" },
+    { name: "fullscreen_focus_changes_at_press_guard", overlay: true, atPress: "focus", status: "confirmed" },
+    { name: "fullscreen_uid_changes_at_press_guard", overlay: true, atPress: "uid", status: "not_sent", reason: "pdd_conversation_changed" },
+    { name: "fullscreen_draft_changes_at_press_guard", overlay: true, atPress: "draft", status: "not_sent", reason: "pdd_input_mismatch" },
+    { name: "fullscreen_observe_recheck_at_press_guard", overlay: true, atPress: "observe", status: "not_sent", reason: "shop_observe_only" },
+    { name: "fullscreen_page_changes_at_press_guard", overlay: true, atPress: "page", status: "not_sent", reason: "pdd_page_changed" },
+    { name: "fullscreen_deadline_expires_at_press_guard", overlay: true, atPress: "deadline", status: "not_sent", reason: "claim_expiring" },
+    { name: "fullscreen_button_hidden_at_press_guard", overlay: true, atPress: "hidden", status: "not_sent", reason: "pdd_send_control_unverified" },
+    { name: "fullscreen_button_disabled_at_press_guard", overlay: true, atPress: "disabled", status: "not_sent", reason: "pdd_send_control_unverified" },
+    { name: "fullscreen_native_mac_trusted_click", overlay: true, nativeMac: true, status: "confirmed" },
+    { name: "fullscreen_press_rejected_no_retry", overlay: true, rejectPress: true, status: "unknown", reason: "pdd_playwright_click_uncertain" },
+    { name: "fullscreen_press_hangs_bounded_no_retry", overlay: true, hangPress: true, status: "unknown", reason: "pdd_playwright_click_uncertain" },
     { name: "press_rejected_no_release_or_retry", rejectPress: true, status: "unknown", reason: "pdd_playwright_click_uncertain" },
     { name: "press_hangs_bounded_no_release_or_retry", hangPress: true, status: "unknown", reason: "pdd_playwright_click_uncertain" },
     { name: "button_hint_enter", hint: true, status: "confirmed" },
@@ -127,11 +132,16 @@ app.whenReady().then(async () => {
     { name: "gpt_suggest_hides_footer_uses_its_send_button", gpt: true, status: "confirmed" },
     { name: "gpt_suggest_send_button_loading_is_not_clicked", gpt: true, gptDisabled: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
     { name: "zoom80", zoom: 0.8, status: "confirmed" },
-    { name: "fully_covered", mask: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
-    { name: "fullscreen_business_modal_content_is_not_bypassed", overlay: true, overlayContent: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
-    { name: "fullscreen_centered_business_content_is_not_bypassed", overlay: true, overlayContent: true, centeredContent: true, status: "not_sent", reason: "pdd_send_button_not_ready" },
-    { name: "fullscreen_hidden_business_content_allows_enter", overlay: true, overlayContent: true, hiddenContent: true, status: "confirmed" },
-    { name: "fullscreen_business_content_appears_at_key_guard", overlay: true, atKey: "business", status: "not_sent", reason: "pdd_send_button_covered" },
+    { name: "fully_covered_trusted_click", mask: true, status: "confirmed" },
+    { name: "fullscreen_business_modal_content_sends", overlay: true, overlayContent: true, status: "confirmed" },
+    { name: "fullscreen_centered_business_content_sends", overlay: true, overlayContent: true, centeredContent: true, status: "confirmed" },
+    { name: "fullscreen_hidden_business_content_sends", overlay: true, overlayContent: true, hiddenContent: true, status: "confirmed" },
+    { name: "fullscreen_new_business_overlay_at_press_guard", overlay: true, atPress: "business", status: "confirmed" },
+    { name: "fullscreen_multiple_layers", overlay: true, mask: true, overlayContent: true, status: "confirmed" },
+    { name: "fullscreen_restores_important_display", overlay: true, displayPriority: true, status: "confirmed" },
+    { name: "fullscreen_preserves_originally_hidden_overlay", overlay: true, hiddenOverlay: true, status: "confirmed" },
+    { name: "fullscreen_reappears_at_press_guard", overlay: true, atPress: "redisplay", status: "confirmed" },
+    { name: "fullscreen_page_watchdog_restores_without_main_cleanup", overlay: true, focusTrap: true, watchdog: true, atPress: "deadline", status: "not_sent", reason: "claim_expiring" },
     { name: "two_visible_buttons_are_ambiguous", ambiguous: true, status: "not_sent", reason: "pdd_send_control_unverified" },
     { name: "different_conversation", otherBuyer: true, status: "not_sent", reason: "pdd_conversation_changed" },
     { name: "human_draft_changed", changeDraft: true, status: "not_sent", reason: "pdd_input_mismatch" },
@@ -147,6 +157,9 @@ app.whenReady().then(async () => {
       const messageId = String(880000 + scenarios.indexOf(s));
       received = []; unexpected = [];
       wc.debugger.sendCommand = nativeCommand;
+      // 故意丢弃主进程 finally 的恢复调用，验收页面内定时器能独立收尾。
+      wc.executeJavaScriptInIsolatedWorld = (world, scripts, ...args) => s.watchdog && scripts[0]?.code.startsWith('globalThis["claw-send-surface-')
+        ? Promise.resolve() : nativeIsolatedWorld(world, scripts, ...args);
       await fixtureSession.protocol.handle('https', documentFixture);
       await win.loadURL(origin + '/fixture');
       await fixtureSession.protocol.unhandle('https');
@@ -157,26 +170,25 @@ app.whenReady().then(async () => {
         if (!sessionId && method === 'Fetch.requestPaused') paused.set(params.requestId, params.request);
       });
       const adapter = new PddPageAdapter("fixture", "虚构店铺");
-      let verifications = 0, keyBoundary = false;
-      const deadline = Date.now() / 1000 + (s.shortDeadline ? 1.7 : s.atKey === 'deadline' ? 3 : 10);
+      let verifications = 0, pressBoundary = false;
+      const deadline = Date.now() / 1000 + (s.shortDeadline ? 1.7 : s.atPress === 'deadline' ? 3 : 10);
       wc.debugger.sendCommand = async (method, params = {}, sessionId) => {
         if (params.type === "mouseMoved" && s.switchBeforePress) await wc.executeJavaScript('document.querySelector(".chat-item-box").setAttribute("data-random","9002-fixture")');
         if (params.type === "mouseMoved" && s.draftBeforePress) await wc.executeJavaScript('document.querySelector("textarea").value="人工草稿"');
-        // 第二次原文/焦点核验来自 transport 的 keyDown blocker，而非初次 Enter 准备。
-        if (method === 'Runtime.callFunctionOn' && JSON.stringify(params).includes('args.enter') && ++verifications === 2) {
-          keyBoundary = true;
-          if (s.atKey === 'uid') await wc.executeJavaScript('document.querySelector(".chat-item-box").dataset.random="9002-fixture"');
-          if (s.atKey === 'draft') await wc.executeJavaScript('document.querySelector("textarea").value="人工草稿"');
-          if (s.atKey === 'focus') await wc.executeJavaScript('document.querySelector(".full-screen-dialog-basic").focus()');
-          if (s.atKey === 'page') adapter.watchEpoch++;
-          if (s.atKey === 'hidden') await wc.executeJavaScript('document.querySelector("#composer .send-btn").style.visibility="hidden"');
-          if (s.atKey === 'disabled') await wc.executeJavaScript('document.querySelector("#composer .send-btn").setAttribute("aria-disabled","true")');
-          if (s.atKey === 'business') await wc.executeJavaScript('document.querySelector(".full-screen-dialog-basic").insertAdjacentHTML("beforeend",\'<div style="position:absolute;left:300px;top:250px;width:300px;height:160px">虚构业务弹窗</div>\')');
-          if (s.atKey === 'deadline') await sleep(Math.max(0, deadline * 1000 - 1500 - Date.now() + 20));
+        // 第二次原文核验来自 transport 的 mousePressed guard。
+        if (method === 'Runtime.callFunctionOn' && JSON.stringify(params).includes('args.key') && ++verifications === 2) {
+          pressBoundary = true;
+          if (s.atPress === 'uid') await wc.executeJavaScript('document.querySelector(".chat-item-box").dataset.random="9002-fixture"');
+          if (s.atPress === 'draft') await wc.executeJavaScript('document.querySelector("textarea").value="人工草稿"');
+          if (s.atPress === 'focus') await wc.executeJavaScript('document.querySelector("#messages").tabIndex=0;document.querySelector("#messages").focus()');
+          if (s.atPress === 'redisplay') await wc.executeJavaScript('document.querySelectorAll(".fullscreen-dialog-manager,.el-dialog__wrapper").forEach(el=>el.style.display="block")');
+          if (s.atPress === 'page') adapter.watchEpoch++;
+          if (s.atPress === 'hidden') await wc.executeJavaScript('document.querySelector("#composer .send-btn").style.visibility="hidden"');
+          if (s.atPress === 'disabled') await wc.executeJavaScript('document.querySelector("#composer .send-btn").setAttribute("aria-disabled","true")');
+          if (s.atPress === 'business') await wc.executeJavaScript('document.body.insertAdjacentHTML("beforeend",\'<div id="late-overlay" class="el-overlay" style="position:fixed;inset:0;z-index:99;background:white">虚构业务弹窗</div>\')');
+          if (s.atPress === 'deadline') await sleep(Math.max(0, deadline * 1000 - 1500 - Date.now() + 20));
         }
         if (['mousePressed', 'mouseReleased', 'keyDown', 'rawKeyDown', 'keyUp', 'char'].includes(params.type)) commands.push(params.type);
-        if (method === 'Input.dispatchKeyEvent' && ['keyDown', 'rawKeyDown'].includes(params.type) && s.rejectKey) throw new Error('fictional_key_failure');
-        if (method === 'Input.dispatchKeyEvent' && ['keyDown', 'rawKeyDown'].includes(params.type) && s.hangKey) return new Promise(() => {});
         if (method === 'Fetch.continueRequest' || method === 'Fetch.failRequest' || method === 'Network.getResponseBody') network.push(method);
         if (params.type === "mousePressed" && s.rejectPress) throw new Error("fictional_input_failure");
         if (params.type === "mousePressed" && s.hangPress) return new Promise(() => {});
@@ -205,28 +217,36 @@ app.whenReady().then(async () => {
       let result;
       console.log = (...args) => { logs.push(args.join(' ')); originalLog(...args); };
       try {
-        result = await adapter.send({ conversation_id: '9001', text: '虚构回复', attempt_id: 'fixture-only', deadline, recheck: () => s.recheck || (s.atKey === 'observe' && keyBoundary ? 'shop_observe_only' : null) });
+        result = await adapter.send({ conversation_id: '9001', text: '虚构回复', attempt_id: 'fixture-only', deadline, recheck: () => s.recheck || (s.atPress === 'observe' && pressBoundary ? 'shop_observe_only' : null) });
       } finally { console.log = originalLog; }
       const elapsed = Date.now() - started;
       if (s.status === 'confirmed') await until(() => wc.executeJavaScript('document.querySelectorAll(".agent-message").length===1'));
       // 已返回结果后继续观察一次，确保 unknown 和被阻止的发送没有异步重试。
       await sleep(80);
+      if (s.watchdog) {
+        assert.ok(await wc.executeJavaScriptInIsolatedWorld(1001, [{code:'Object.keys(globalThis).some(key=>key.startsWith("claw-send-surface-"))'}]), 'main-process cleanup must actually be suppressed');
+        await sleep(Math.max(0, deadline * 1000 - 450 - Date.now()));
+      }
       const clicks = await wc.executeJavaScript('window.clicks');
       const enters = await wc.executeJavaScript('window.enters');
       try {
         assert.equal(result.status, s.status);
         if (s.reason) assert.equal(result.reason, s.reason);
         const sent = s.status === 'confirmed' || s.noId;
-        const expectedCommands = sent ? (s.overlay ? ['keyDown', 'keyUp'] : ['mousePressed', 'mouseReleased']) : s.rejectPress || s.hangPress ? ['mousePressed'] : s.rejectKey || s.hangKey ? ['keyDown'] : [];
-        assert.equal(clicks, sent && !s.overlay ? 1 : 0);
+        const expectedCommands = sent ? ['mousePressed', 'mouseReleased'] : s.rejectPress || s.hangPress ? ['mousePressed'] : [];
+        assert.equal(clicks, sent ? 1 : 0);
+        assert.deepEqual(await wc.executeJavaScript('window.trustedClicks'), sent ? [true] : []);
         assert.deepEqual(commands, expectedCommands, 'one input attempt, no fallback click or retry');
-        assert.deepEqual(enters, sent && s.overlay ? [{ trusted: true, focused: true }] : []);
+        assert.deepEqual(enters, []);
+        assert.equal(await wc.executeJavaScript('window.originalSurface.every(({el,display,priority})=>el.isConnected && el.style.getPropertyValue("display")===display && el.style.getPropertyPriority("display")===priority)'), true, 'temporary styles must be restored');
+        assert.equal(await wc.executeJavaScript('document.querySelector("#composer").hasAttribute("inert")'), !!s.focusTrap);
+        assert.deepEqual(await wc.executeJavaScriptInIsolatedWorld(1001, [{code:'Object.keys(globalThis).filter(key=>key.startsWith("claw-send-surface-"))'}]), []);
+        if (s.atPress === 'business') assert.equal(await wc.executeJavaScript('document.querySelector("#late-overlay").style.display'), '');
         assert.deepEqual(received, sent ? [{ data: { message: { to: { role: 'user', uid: '9001' }, content: '虚构回复', type: 1 } } }] : []);
         assert.deepEqual(unexpected, [], 'all requests must stay inside the isolated fixture');
         assert.deepEqual(await wc.executeJavaScript('window.sendErrors'), []);
         assert.equal(network.filter(method => method === 'Fetch.continueRequest').length, sent ? 1 : 0);
         if (sent) assert.ok(network.includes('Network.getResponseBody'), 'real attachNetwork must read the platform response');
-        assert.equal(logs.filter(line => line.includes('platform send via enter:')).length, sent && s.overlay ? 1 : 0);
         if (s.status === 'confirmed') {
           assert.equal(result.platform_message_id, messageId);
           assert.deepEqual(await wc.executeJavaScript('[...document.querySelectorAll(".buyer-message,.agent-message")].map(e=>({role:e.className,uid:e.dataset.uid,text:e.textContent,id:e.dataset.messageId||null}))'), [
@@ -234,9 +254,9 @@ app.whenReady().then(async () => {
             { role: 'agent-message', uid: '9001', text: '虚构回复', id: messageId },
           ]);
         } else assert.equal(await wc.executeJavaScript('document.querySelectorAll(".agent-message").length'), 0);
-        if (s.atKey) assert.ok(keyBoundary, 'mutation must occur in keyDown guard after initial verification');
+        if (s.atPress) assert.ok(pressBoundary, 'mutation must occur in mousePressed guard after initial verification');
         if (s.noId) assert.equal(await wc.executeJavaScript('document.querySelector("textarea").value'), '虚构回复');
-        if (s.hangKey || s.rejectKey) assert.ok(elapsed < 3000, 'key transport failure must be bounded');
+        if (s.hangPress || s.rejectPress) assert.ok(elapsed < 3000, 'mouse transport failure must be bounded');
         assert.equal(adapter.sending, false);
         assert.equal(adapter.outgoing, null);
         if (s.changeDraft || s.draftBeforePress) assert.equal(await wc.executeJavaScript('document.querySelector("textarea").value'), "人工草稿");
@@ -245,7 +265,7 @@ app.whenReady().then(async () => {
         if (s.neverReveal) assert.ok(elapsed < 3000, "等待必须有界");
         results.push({ name: s.name, ok: true, result, clicks, enters, commands, requests: received.length, network, elapsed });
       } catch (error) {
-        results.push({ name: s.name, ok: false, result, clicks, enters, commands, received, network, keyBoundary, verifications, error: error.message });
+        results.push({ name: s.name, ok: false, result, clicks, enters, commands, received, network, pressBoundary, verifications, error: error.message });
       } finally {
         console.log('send_location_scenario ' + JSON.stringify(results.at(-1)));
         wc.debugger.removeAllListeners('message');

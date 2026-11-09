@@ -1,6 +1,6 @@
 import type { WebContents } from "electron";
 
-export type PageClickResult = { status: "dispatched"; via?: "enter" } | { status: "not_sent" | "unknown"; reason: string };
+export type PageClickResult = { status: "dispatched" } | { status: "not_sent" | "unknown"; reason: string };
 
 type Contents = Pick<WebContents, "isDestroyed" | "debugger">;
 type Point = { x: number; y: number };
