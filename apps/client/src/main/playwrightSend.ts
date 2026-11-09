@@ -176,10 +176,21 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
       await button.evaluate(el => el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" }));
       const before = blocked(); if (before) return stop(before);
       verifyAtPress = async () => {
+        step = "surface_sweep";
         await wc.executeJavaScriptInIsolatedWorld(1001, [{ code: sweepSurface }]);
         // DOM 命中已变化时，合成器仍可能保留滚动前的点击区域；等新帧后再核验并按下。
+        // 首帧捕获可暂时失败；尚未点击时仅重取一次，仍受原截止与授权约束。
         // 只捕获一个像素以同步页面，不保存或上传图像，也不显示隐藏窗口。
-        await wc.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
+        step = "frame_capture";
+        try {
+          await wc.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
+        } catch (error) {
+          if (wc.isDestroyed() || blocked()) throw error;
+          await new Promise(resolve => setTimeout(resolve, 50));
+          const reason = blocked(); if (reason) return reason;
+          await wc.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
+        }
+        step = "input_verify";
         return input.evaluate((ta, args) => {
           const keys = [...document.querySelectorAll("li.chat-item .chat-item-box.active[data-random]")].map(e => /^([0-9]{1,32})-/.exec(e.getAttribute("data-random") ?? "")?.[1]);
           const target = document.querySelector<HTMLElement>(`[data-claw-send-key="${args.key}"]`);
