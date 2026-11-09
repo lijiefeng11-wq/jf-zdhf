@@ -1,6 +1,8 @@
 import type { StoredMessage } from "./journal.js";
 
 export const REPLY_START_BUDGET_MS = 20_000;
+export const TIMEOUT_TRANSFER_BUDGET_MS = 60_000;
+export const TRANSFER_RESERVE_MS = 15_000;
 export const REPLY_DEADLINE_REASON = "reply_deadline_exceeded";
 type TimingRecord = { start: number | null; deadline: number; stages: Record<string, number>; logged: boolean };
 
@@ -16,7 +18,7 @@ export class ReplyTiming {
     const age = fresh ? 0 : typeof first === "number" && Number.isFinite(first) ? wall - first : NaN;
     const valid = Number.isFinite(now) && Number.isFinite(wall) && Number.isFinite(age) && age >= 0;
     const start = valid ? now - age : null;
-    this.records.set(message, { start, deadline: start === null ? -Infinity : start + REPLY_START_BUDGET_MS, stages: {}, logged: false });
+    this.records.set(message, { start, deadline: start === null ? -Infinity : start + (message.timeout_transfer ? TIMEOUT_TRANSFER_BUDGET_MS : REPLY_START_BUDGET_MS), stages: {}, logged: false });
   }
 
   private record(message: StoredMessage) {

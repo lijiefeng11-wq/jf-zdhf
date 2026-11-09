@@ -32,6 +32,8 @@ export const REASONS: Record<string, string> = {
   unsupported_content: "最新消息是无法识别的内容",
   decision_expired: "判断已过期",
   reply_deadline_exceeded: "超过回复时限，本条待人工处理；后续新消息继续处理",
+  timeout_transfer_not_configured: "回复超时，未配置模型超时接收客服，平台未执行转接",
+  timeout_transfer_not_allowed: "已有动作或结果，不能追加超时转接",
   already_attempted: "此事件已有发送尝试",
   conversation_busy: "此对话正有发送进行中",
   claim_expiring: "发送许可即将过期",

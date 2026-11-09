@@ -78,7 +78,7 @@ describe("新前台 / 实际 Python 新后台", () => {
   const start = async (mono: () => number) => {
     await launch(); await backend.settings("shop-a", true);
     const seen: { method: string; path: string; body: string | undefined }[] = [];
-    const spy: FetchLike = (async (input: any, init?: any) => { seen.push({ method: init?.method ?? "GET", path: new URL(String(input)).pathname, body: init?.body }); return fetch(input, init); }) as FetchLike;
+    const spy: FetchLike = (async (input: any, init?: any) => { seen.push({ method: init?.method ?? "GET", path: new URL(String(input)).pathname, body: init?.body }); return withoutCapability("reply_timeout_transfer")(input, init); }) as FetchLike;
     const h = await makeShop({ backend, fetchImpl: spy, monotonicNow: mono }); running.push(h);
     return { h, seen, confirmed: h.rt.deadlineConfirmed(h.rt.lease.generation) };
   };
@@ -140,7 +140,7 @@ describe("新前台 / 实际 Python 新后台", () => {
       await launch({ model: { primary: { base_url: `http://127.0.0.1:${port}/v1`, model: "synthetic-model", timeout_seconds: 3 } } });
       await backend.settings("shop-a", true, [], "model");
       const seen: { path: string; body: string | undefined }[] = [];
-      const spy: FetchLike = (async (input: any, init?: any) => { seen.push({ path: new URL(String(input)).pathname, body: init?.body }); return fetch(input, init); }) as FetchLike;
+      const spy: FetchLike = (async (input: any, init?: any) => { seen.push({ path: new URL(String(input)).pathname, body: init?.body }); return withoutCapability("reply_timeout_transfer")(input, init); }) as FetchLike;
       const logs: string[] = [];
       // 本地单调时钟固定为 0（本地 20 秒不会到期）；前台放弃轮询的时限必须长于后台 20 秒预算，
       // 否则后台在预算内（如 Windows 上 spawn 子进程较慢时）仍在判断，前台却已停止查询。
