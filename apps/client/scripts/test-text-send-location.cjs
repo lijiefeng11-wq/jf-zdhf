@@ -92,10 +92,14 @@ app.whenReady().then(async () => {
   const wc = win.webContents;
   const nativeCommand = wc.debugger.sendCommand.bind(wc.debugger);
   const nativeIsolatedWorld = wc.executeJavaScriptInIsolatedWorld.bind(wc);
+  const nativeCapturePage = wc.capturePage.bind(wc);
   const scenarios = [
     { name: "below_viewport_scrolls_before_click", css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
     { name: "below_viewport_arbitrary_mask_sends_after_scroll", mask: true, css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
     ...Array.from({ length: 8 }, (_, i) => ({ name: `scroll_mask_frame_sync_${i}`, mask: true, zoom: i % 2 ? 1 : 0.8, css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" })),
+    { name: "first_frame_capture_rejection_recovers_before_single_click", captureFailures: 1, css: "#composer{top:1000px}body{height:1500px}", status: "confirmed" },
+    { name: "repeated_frame_capture_rejection_stops_without_click", captureFailures: 2, status: "not_sent", reason: "pdd_send_button_not_ready" },
+    { name: "draft_changes_during_frame_capture_recovery", captureFailures: 1, captureDraftChange: true, status: "not_sent", reason: "pdd_input_mismatch" },
     { name: "ancestor_clipping_scrolls_before_click", css: "#composer{height:70px;overflow:hidden}", status: "confirmed" },
     { name: "normal", status: "confirmed" },
     { name: "fullscreen_overlay_trusted_click_confirmed", overlay: true, status: "confirmed" },
@@ -161,6 +165,15 @@ app.whenReady().then(async () => {
   try {
     for (const s of scenarios) {
       currentScenario = s;
+      let captureFailures = 0;
+      wc.capturePage = async (...args) => {
+        if (captureFailures < (s.captureFailures || 0)) {
+          captureFailures++;
+          if (s.captureDraftChange) await wc.executeJavaScript('document.querySelector("textarea").value="人工草稿"');
+          throw new Error('fixture_frame_capture_unavailable');
+        }
+        return nativeCapturePage(...args);
+      };
       const messageId = String(880000 + scenarios.indexOf(s));
       received = []; unexpected = [];
       wc.debugger.sendCommand = nativeCommand;
@@ -242,6 +255,7 @@ app.whenReady().then(async () => {
       const enters = await wc.executeJavaScript('window.enters');
       try {
         assert.equal(result.status, s.status);
+        if (s.captureFailures) assert.equal(captureFailures, s.captureFailures);
         if (s.status === 'confirmed') await until(() => wc.executeJavaScript('document.querySelectorAll(".agent-message").length===1'));
         if (s.reason) assert.equal(result.reason, s.reason);
         const sent = s.status === 'confirmed' || s.noId;
