@@ -473,7 +473,7 @@ try {
       const r = spawnSync(require("electron"), [...(process.platform === "linux" ? ["--no-sandbox"] : []), path.join(clientRoot, "scripts", script)], { encoding: "utf8", timeout: 200_000, env: { ...process.env, CLAW_NEXT_SEND_LOCATION_DATA: path.join(tmp, "send-location-data") } });
       const line = (r.stdout || "").split("\n").reverse().find((l) => l.startsWith("{"));
       const out = line ? JSON.parse(line) : null;
-      if (r.status !== 0 || !out?.ok) throw new Error(`${script} 失败：${line ?? r.stderr?.slice(-300) ?? r.status}`);
+      if (r.status !== 0 || !out?.ok) throw new Error(`${script} 失败：status=${r.status} signal=${r.signal} error=${r.error?.message ?? ""}\n${line ?? r.stdout?.slice(-12000) ?? ""}\n${r.stderr?.slice(-4000) ?? ""}`);
     });
   }
   await step("界面 HTML 中不含客户端口令", async () => {

@@ -19,7 +19,8 @@ const cover = id => `https://img.example.invalid/${id}.jpg`;
 const rows = [1, 2].map(id => ({ key: `video:${id}`, name: `虚构视频${id}`, url: video(id), cover: cover(id) }));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const results = [];
-const watchdog = setTimeout(() => app.exit(2), 90_000);
+let stage = 'startup';
+const watchdog = setTimeout(() => { console.log(JSON.stringify({ ok: false, stage, results, error: 'fixture_watchdog' })); app.exit(2); }, 90_000);
 
 function html(s) {
   return `<!doctype html><meta charset="utf-8"><style>
@@ -84,6 +85,7 @@ app.whenReady().then(async () => {
   ];
   try {
     for (const s of scenarios) {
+      stage = s.name;
       unexpected = [];
       wc.debugger.sendCommand = nativeCommand;
       await fixture.protocol.handle('https', request => request.url === origin + '/fixture'
@@ -188,7 +190,7 @@ app.whenReady().then(async () => {
   }
   console.log(JSON.stringify({ ok: results.length === scenarios.length && results.every(r => r.ok), results }));
   process.exitCode = results.every(r => r.ok) ? 0 : 1;
-}).catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
+}).catch(error => { console.log(JSON.stringify({ ok: false, stage, results, error: error.stack || String(error) })); process.exitCode = 1; }).finally(() => {
   clearTimeout(watchdog);
   if (!parentOwned) { try { fs.rmSync(temp, { recursive: true, force: true }); } catch {} }
   app.exit(process.exitCode || 0);
