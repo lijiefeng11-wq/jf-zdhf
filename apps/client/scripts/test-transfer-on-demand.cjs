@@ -11,6 +11,7 @@ const { selectSendControl, stopSelector } = require(path.join(root, 'dist/src/ma
 const cases = [], timer = setTimeout(() => app.exit(2), 120000);
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1000, height: 700, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+  if (process.platform !== 'darwin') win.showInactive();
   const wc = win.webContents;
   wc.session.webRequest.onBeforeRequest((d, c) => c({ cancel: !d.url.startsWith('data:') }));
   wc.debugger.attach('1.3');
@@ -51,7 +52,7 @@ app.whenReady().then(async () => {
       assert.equal(missing.status, 'not_sent'); assert.equal(missing.reason, 'transfer_target_missing');
       const second = await send();
       const beforeMatch = await wc.executeJavaScript("({open:getComputedStyle(document.querySelector('.el-dialog__wrapper')).display!=='none',opens,closes,sends,rows,transfers,escapes})");
-      assert.equal(second.status, 'confirmed'); assert.equal(beforeMatch.open, false);
+      assert.equal(second.status, 'confirmed', JSON.stringify({ second, beforeMatch })); assert.equal(beforeMatch.open, false);
       assert.deepEqual([beforeMatch.opens, beforeMatch.closes, beforeMatch.sends, beforeMatch.rows, beforeMatch.transfers, beforeMatch.escapes], [1, 1, 2, 0, 0, 0]);
       if (process.env.CLAW_NEXT_TRANSFER_SHOT && !header) fs.writeFileSync(process.env.CLAW_NEXT_TRANSFER_SHOT, (await wc.capturePage()).toPNG());
       const matched = await a.transferConversation(request('fictional-main'));
