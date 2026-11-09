@@ -468,7 +468,7 @@ try {
     const out = line ? JSON.parse(line) : null;
     if (r.status !== 0 || !out?.ok) throw new Error(`点击记录回归失败：${line ?? r.stderr?.slice(-300) ?? r.status}`);
   });
-  for (const [name, script] of [["文字发送定位：弹窗与焦点锁不阻止可信点击，发送后恢复遮挡；会话、草稿与回执仍核验", "test-text-send-location.cjs"], ["普通回复不打开转接框；按账号转接仅在执行时精确定位，缺失账号不阻塞后续回复", "test-transfer-on-demand.cjs"], ["诊断收藏颜色测试：只点星标颜色浮层，会话不符或浮层不确定时零点击", "test-star-test.cjs"], ["诊断转移会话测试：只确认名称精确匹配的唯一目标，会话不符或重排不确认，取消收藏须请求允许", "test-transfer-test.cjs"]]) {
+  for (const [name, script] of [["文字发送定位：弹窗与焦点锁不阻止可信点击，发送后恢复遮挡；会话、草稿与回执仍核验", "test-text-send-location.cjs"], ["视频可信点击：入口与发送按钮移开遮挡后恢复，核对买家和视频，unknown 不重试", "test-video-send-location.cjs"], ["普通回复不打开转接框；按账号转接仅在执行时精确定位，缺失账号不阻塞后续回复", "test-transfer-on-demand.cjs"], ["诊断收藏颜色测试：只点星标颜色浮层，会话不符或浮层不确定时零点击", "test-star-test.cjs"], ["诊断转移会话测试：只确认名称精确匹配的唯一目标，会话不符或重排不确认，取消收藏须请求允许", "test-transfer-test.cjs"]]) {
     await step(name, async () => {
       const r = spawnSync(require("electron"), [...(process.platform === "linux" ? ["--no-sandbox"] : []), path.join(clientRoot, "scripts", script)], { encoding: "utf8", timeout: 200_000, env: { ...process.env, CLAW_NEXT_SEND_LOCATION_DATA: path.join(tmp, "send-location-data") } });
       const line = (r.stdout || "").split("\n").reverse().find((l) => l.startsWith("{"));

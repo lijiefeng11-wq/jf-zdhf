@@ -26,6 +26,7 @@ function harness(s: Scenario) {
   const counts = { clicks: 0, reloads: 0 };
   const webContents = {
     isDestroyed: () => false,
+    capturePage: async () => undefined,
     getURL: () => "https://mms.pinduoduo.com/chat-merchant/index.html",
     reload: () => {
       counts.reloads++;
@@ -44,6 +45,7 @@ function harness(s: Scenario) {
       if (code.includes("freshBuyer")) return { items: [{ key: `${BUYER}-x`, unread: false, active: true }], freshBuyer: false };
       if (code.includes("chat-detail")) return true;
       if (code.includes("pdd_video_entry_missing")) return "open";
+      if (code.includes("?.point()")) return { x: 10, y: 10 };
       if (code.includes("pdd_video_button_missing")) return { texts: ROWS.map((r) => `${r.name} 00:10 发送`), srcs: s.srcs, x: 10, y: 10 };
       return null;
     },
