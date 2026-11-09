@@ -11,7 +11,6 @@ const { selectSendControl, stopSelector } = require(path.join(root, 'dist/src/ma
 const cases = [], timer = setTimeout(() => app.exit(2), 120000);
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1000, height: 700, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
-  win.showInactive();
   const wc = win.webContents;
   wc.session.webRequest.onBeforeRequest((d, c) => c({ cancel: !d.url.startsWith('data:') }));
   wc.debugger.attach('1.3');

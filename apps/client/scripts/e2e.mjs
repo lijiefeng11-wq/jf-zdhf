@@ -82,6 +82,8 @@ try {
   }
   if (!page) throw new Error("未找到客户端主界面");
   page.setDefaultTimeout(15_000);
+  // Electron 启动时 showInactive；鼠标操作前先把本次隔离测试窗口放到前台。
+  await page.bringToFront();
   const detail = page.locator("#detail");
   const card = (title) => detail.locator(".card", { has: page.locator("h3", { hasText: title }) }).locator(".value");
   const chipOf = (conv) => page.locator(".messages .msg.buyer .chip").last();
@@ -99,6 +101,8 @@ try {
     } catch (err) {
       check(name, false);
       failed ??= `${name}: ${err?.message?.split("\n")[0] ?? err}`;
+      // 保留 Playwright 的完整 actionability call log，区分焦点、遮挡、重绘与定位失败。
+      console.error(`界面步骤失败：${name}\n${err?.stack ?? err}`);
       await shot(page, `fail-${checks.length}`);
     }
   };
