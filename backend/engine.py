@@ -20,6 +20,12 @@ TEST_PROMPT = "This is a harmless connectivity check. Reply with the single word
 MAX_COMPLETION_TOKENS = 1024
 
 
+# The platform's order-remark card (the buyer wrote a remark, e.g. their car, on the order): acknowledge it. The
+# card's confirm/reject buttons rewrite the order and are never pressed.
+REMARK_CARD_TITLE = "请确认消费者订单备注"
+REMARK_CARD_REPLY = "嗯嗯 已记录"
+
+
 def decision(action, reason, text=""):
     return {"action": action, "text": text, "reason": reason, "expires_at": time.time() + 60}
 
@@ -83,6 +89,10 @@ def immediate_decision(job):
         return decision("reply", "image_missing", "这张图片暂时没加载出来，请重新发一下图片，或说明您想咨询的问题。")
     if not text and not latest.get("attachments") and not latest.get("card"):
         return decision("reply", "content_missing", "请补充一下您想咨询的内容，我再帮您看。")
+    card = latest.get("card") or {}
+    if (latest["kind"] == "card" and card.get("type") == "order" and card.get("title") == REMARK_CARD_TITLE
+            and any(f.get("label") == "备注内容" and f.get("value", "").strip() for f in card.get("fields") or ())):
+        return decision("reply", "order_remark_card", REMARK_CARD_REPLY)
     if settings["mode"] == "rules":
         if latest["kind"] == "text" and not latest.get("attachments"):
             for rule in settings["rules"]:

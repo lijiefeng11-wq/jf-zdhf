@@ -78,6 +78,18 @@ export function goodsCard(m: Record<string, unknown>): Card | null {
   return { type: "goods", ...(title ? { title } : {}), ...(price ? { fields: [{ label: "价格", value: price }] } : {}) };
 }
 
+export const REMARK_CARD_TITLE = "请确认消费者订单备注";
+
+/**
+ * 买家在订单页提交备注后平台生成的确认卡片（type 48，模板 order_remarks_apply_card）：
+ * biz_context.remarks 是备注原文。只读内容；卡片上的“确认备注/拒绝备注”按钮会改写订单，从不点击。
+ */
+export function remarkCard(m: Record<string, unknown>): Card | null {
+  if (m.type !== 48 || m.template_name !== "order_remarks_apply_card") return null;
+  const remarks = cardText(obj(m.biz_context)?.remarks, 200);
+  return { type: "order", title: REMARK_CARD_TITLE, ...(remarks ? { fields: [{ label: "备注内容", value: remarks }] } : {}) };
+}
+
 /** 图片消息（type=1）：info.image_url 为平台图片地址，content 通常是同一地址。只取 https 地址。 */
 export function imageRef(m: Record<string, unknown>): string | null {
   if (m.type !== 1) return null;
@@ -167,9 +179,11 @@ export function parseChatList(requestBody: unknown, responseBody: unknown, shopI
       continue;
     }
     const source = sourceCard(m);
-    const { kind, placeholder } = source ? { kind: "card" as const, placeholder: source } : kindOf(m);
-    const goods = source ? null : goodsCard(m);
-    const card: Card | null = source ? { type: m.type === 31 ? "system" : "source", title: source } : goods;
+    const remark = source ? null : remarkCard(m);
+    const remarkText = remark ? `${REMARK_CARD_TITLE}：备注内容 ${remark.fields?.[0]?.value ?? "（未读到）"}` : null;
+    const { kind, placeholder } = source ? { kind: "card" as const, placeholder: source } : remarkText ? { kind: "card" as const, placeholder: remarkText } : kindOf(m);
+    const goods = source || remark ? null : goodsCard(m);
+    const card: Card | null = source ? { type: m.type === 31 ? "system" : "source", title: source } : remark ?? goods;
     if (card && shopId && (goods || card.type === "source")) {
       const info = obj(m.info), nested = obj(info?.goods_info);
       const ids = [info?.goodsID, info?.goodsId, nested?.goods_id].filter(v => v !== undefined && v !== null);
