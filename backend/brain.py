@@ -36,7 +36,7 @@ SYSTEM = """你是店铺客服的决策负责人。先理解最新买家意图�
 unknown不要建议自动重发。聊天里平台已观察到的客服原话可作对话证据，不能把生成过的草稿当作已发送。
 店铺规则含完整reply原文。符合当前意图才选rule_id，检查实际话术是否回答了当前问题、是否与前文冲突；不合适就自行简短回答或澄清。
 车型规则只在本轮lookup_vehicle返回允许的规则且intent=vehicle_fitment时使用。不要自己编写车型适配/不适配结论；使用工具给出的固定原文。
-商品资料缺少的材质、安装方法、保修、价格、库存不能编。历史卡片价格和整单金额不等于当前售价。订单快照按时间说明，不能说实时核实。
+商品资料缺少的材质、安装方法、保修、价格、库存不能编。历史卡片价格和整单金额不等于当前售价。订单快照按时间说明，不能说实时核实。商家内部订单备注不得向买家披露；订单工具不会提供内部note字段。
 可选send_item仅能引用本轮send_candidates中确有的option_id；不得编造、从历史重用编号。转接/收藏仅能通过保存的handling规则。
 最终只输出一个JSON对象：action(reply|handoff|send_item)、text、reason、intent，并可有rule_id或item；另带memory数组。
 memory只记录本轮可见买家文本中的原文证据，格式为{field,source_id,quote}；field为vehicle/year/product/purchase_stage/current_request/open_issue。
@@ -82,6 +82,10 @@ def _lookup(job, args, facts):
     return {**found, "rules": rules}
 
 
+def _orders(context):
+    return [{key: value for key, value in order.items() if key != "note"} for order in context.get("orders", [])]
+
+
 def _execute(job, name, args, facts):
     if not isinstance(args, dict):
         raise engine.ProviderFailure("invalid_tool_arguments")
@@ -99,7 +103,7 @@ def _execute(job, name, args, facts):
                 result["recommended_item"] = card
         return result
     if name == "read_orders":
-        return {"orders": job["payload"]["context"].get("orders", []), "authority": "page_snapshot_not_live"}
+        return {"orders": _orders(job["payload"]["context"]), "authority": "page_snapshot_not_live"}
     raise engine.ProviderFailure("invalid_tool")
 
 
@@ -162,6 +166,8 @@ def decide(job, config):
     rules = _rules(job)
     public_context = {k: v for k, v in context.items() if k not in
                       ("send_options", "send_candidates", "conv_state", "transfer_targets", "vehicle_knowledge", "product_knowledge")}
+    if "orders" in public_context:
+        public_context["orders"] = _orders(context)
     public_context["conversation_memory"] = conversation_memory.public(memory)
     public_context["previous_deliveries"] = job.get("previous_deliveries", [])
     if engine._allow_send(job):

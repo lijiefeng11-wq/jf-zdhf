@@ -148,6 +148,18 @@ class BrainTests(unittest.TestCase):
         self.assertEqual(orders["authority"], "page_snapshot_not_live")
         self.assertEqual(orders["orders"][0]["observed_at"], 1)
 
+    def test_internal_order_notes_never_reach_model_or_tool_results(self):
+        work = job(message("m1", "订单备注是什么"))
+        work["payload"]["context"]["orders"] = [{"status": "待发货", "observed_at": 1, "note": "虚构商家保密信息"}]
+        result, post = self.run_brain(work, tool("read_orders", {}), completion(answer("请问您想核对什么信息", "shipping")))
+        self.assertEqual(result["action"], "reply")
+        for call in post.call_args_list:
+            body = json.dumps(call.args[1], ensure_ascii=False)
+            self.assertNotIn("虚构商家保密信息", body)
+        orders = brain._execute(work, "read_orders", {}, {})["orders"]
+        self.assertEqual(orders, [{"status": "待发货", "observed_at": 1}])
+        self.assertEqual(work["payload"]["context"]["orders"][0]["note"], "虚构商家保密信息")
+
     def test_timeout_falls_back_with_fresh_tool_context(self):
         work = job(message("m1", "你好"))
         with patch("backend.engine._post", side_effect=[engine.ProviderFailure("timeout"), completion(answer())]) as post:
@@ -229,6 +241,18 @@ class MemoryTests(unittest.TestCase):
         newer = {"field": "year", "source_id": "year", "quote": "25款"}
         self.assertEqual(conversation_memory.update(after, [newer], ctx)["year"]["quote"], "25款")
         self.assertEqual(conversation_memory.update(before, [correction, newer], ctx)["year"]["quote"], "25款")
+
+    def test_old_year_is_rejected_when_initial_memory_omitted_year(self):
+        for same_time in (False, True):
+            ctx = {"messages": [message("old", "示例车A 22款", when=1), message("new", "改成星河远航", when=1 if same_time else 2),
+                                message("year", "25款", when=3)]}
+            before = conversation_memory.update({}, [{"field": "vehicle", "source_id": "old", "quote": "示例车A"}], ctx)
+            after = conversation_memory.update(before, [{"field": "vehicle", "source_id": "new", "quote": "星河远航"}], ctx)
+            self.assertNotIn("year", after)
+            with self.assertRaisesRegex(ValueError, "old_vehicle_year"):
+                conversation_memory.update(after, [{"field": "year", "source_id": "old", "quote": "22款"}], ctx)
+            updated = conversation_memory.update(after, [{"field": "year", "source_id": "year", "quote": "25款"}], ctx)
+            self.assertEqual(updated["year"]["quote"], "25款")
 
     def test_equal_timestamp_history_gap_cannot_restore_cleared_fact(self):
         ctx = {"messages": [message("old", "缺一片", when=1), message("new", "处理好了", when=1)]}

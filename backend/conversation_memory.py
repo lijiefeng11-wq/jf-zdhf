@@ -57,11 +57,10 @@ def update(memory, changes, context):
         result[field] = {"quote": quote, "source": {k: source[k] for k in ("id", "role", "kind", "content", "created_at")},
                          "cleared": change.get("clear", False)}
     changed_vehicle = "vehicle" in seen and (memory.get("vehicle", {}).get("quote") != result["vehicle"]["quote"] or result["vehicle"]["cleared"])
-    if changed_vehicle and "year" in result:
-        if "year" in seen:
-            if _older(result["year"]["source"], result["vehicle"]["source"], positions):
-                raise ValueError("old_vehicle_year")
-        else:
-            # Keep a tombstone: replaying the old year from history must not restore it.
-            result["year"] = {**copy.deepcopy(result["vehicle"]), "cleared": True}
+    if "year" in seen and "vehicle" in result:
+        if _older(result["year"]["source"], result["vehicle"]["source"], positions):
+            raise ValueError("old_vehicle_year")
+    if changed_vehicle and "year" in result and "year" not in seen:
+        # Keep a tombstone: replaying the old year from history must not restore it.
+        result["year"] = {**copy.deepcopy(result["vehicle"]), "cleared": True}
     return result
