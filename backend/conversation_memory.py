@@ -16,6 +16,18 @@ def public(memory):
             for field, fact in memory.items()}
 
 
+def _older(source, reference, positions):
+    if source["created_at"] != reference["created_at"]:
+        return source["created_at"] < reference["created_at"]
+    if source["id"] == reference["id"]:
+        return False
+    # Equal timestamps are valid. Only visible message order can establish
+    # that different evidence is newer; a history gap cannot prove it.
+    if source["id"] not in positions or reference["id"] not in positions:
+        return True
+    return positions[source["id"]] < positions[reference["id"]]
+
+
 def update(memory, changes, context):
     """Accept only bounded verbatim quotes from this event, never generated claims.
 
@@ -26,6 +38,7 @@ def update(memory, changes, context):
         raise ValueError("invalid_memory")
     result = copy.deepcopy(memory)
     visible = {m["id"]: m for m in context["messages"] if m["role"] == "buyer" and m["kind"] == "text"}
+    positions = {m["id"]: index for index, m in enumerate(context["messages"])}
     seen = set()
     for change in changes:
         if not isinstance(change, dict) or set(change) - {"field", "source_id", "quote", "clear"}:
@@ -39,14 +52,14 @@ def update(memory, changes, context):
                 or quote not in source["content"] or type(change.get("clear", False)) is not bool):
             raise ValueError("invalid_memory")
         old = result.get(field)
-        if old and source["created_at"] < old["source"]["created_at"]:
+        if old and _older(source, old["source"], positions):
             raise ValueError("stale_memory")
         result[field] = {"quote": quote, "source": {k: source[k] for k in ("id", "role", "kind", "content", "created_at")},
                          "cleared": change.get("clear", False)}
     changed_vehicle = "vehicle" in seen and (memory.get("vehicle", {}).get("quote") != result["vehicle"]["quote"] or result["vehicle"]["cleared"])
     if changed_vehicle and "year" in result:
         if "year" in seen:
-            if result["year"]["source"]["created_at"] < result["vehicle"]["source"]["created_at"]:
+            if _older(result["year"]["source"], result["vehicle"]["source"], positions):
                 raise ValueError("old_vehicle_year")
         else:
             # Keep a tombstone: replaying the old year from history must not restore it.

@@ -214,6 +214,31 @@ class MemoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             conversation_memory.update(after, [{"field": "vehicle", "source_id": "old", "quote": "示例车A"}], ctx)
 
+    def test_equal_timestamps_use_message_order_for_corrections(self):
+        ctx = {"messages": [message("old", "示例车A 22款", when=1), message("new", "改成星河远航", when=1),
+                            message("year", "25款", when=1)]}
+        old_year = {"field": "year", "source_id": "old", "quote": "22款"}
+        correction = {"field": "vehicle", "source_id": "new", "quote": "星河远航"}
+        before = conversation_memory.update({}, [{"field": "vehicle", "source_id": "old", "quote": "示例车A"}, old_year], ctx)
+        after = conversation_memory.update(before, [correction], ctx)
+        self.assertTrue(after["year"]["cleared"])
+        with self.assertRaisesRegex(ValueError, "stale_memory"):
+            conversation_memory.update(after, [old_year], ctx)
+        with self.assertRaisesRegex(ValueError, "old_vehicle_year"):
+            conversation_memory.update(before, [correction, old_year], ctx)
+        newer = {"field": "year", "source_id": "year", "quote": "25款"}
+        self.assertEqual(conversation_memory.update(after, [newer], ctx)["year"]["quote"], "25款")
+        self.assertEqual(conversation_memory.update(before, [correction, newer], ctx)["year"]["quote"], "25款")
+
+    def test_equal_timestamp_history_gap_cannot_restore_cleared_fact(self):
+        ctx = {"messages": [message("old", "缺一片", when=1), message("new", "处理好了", when=1)]}
+        old = {"field": "open_issue", "source_id": "old", "quote": "缺一片"}
+        before = conversation_memory.update({}, [old], ctx)
+        after = conversation_memory.update(before, [{"field": "open_issue", "source_id": "new", "quote": "处理好了", "clear": True}], ctx)
+        for visible in (ctx, {"messages": ctx["messages"][:1]}):
+            with self.assertRaisesRegex(ValueError, "stale_memory"):
+                conversation_memory.update(after, [old], visible)
+
     def test_resolved_issue_cannot_be_restored_from_old_history(self):
         ctx = {"messages": [message("old", "缺一片", when=1), message("new", "已处理好了", when=2)]}
         before = conversation_memory.update({}, [{"field": "open_issue", "source_id": "old", "quote": "缺一片"}], ctx)
