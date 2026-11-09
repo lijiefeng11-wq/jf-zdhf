@@ -122,6 +122,61 @@ class FictionalTable(unittest.TestCase):
         self.assertEqual(self.talk(("buyer", "下单了，车型：示例车A 22款"))["status"], "matched")
         self.assertEqual(self.talk(("buyer", "已经下单了，完全没有的车"))["status"], "not_found")
 
+    def test_purchase_questions_and_explicit_money_name_no_car(self):
+        for text in ("我看看咋下单", "我现在怎么买？", "我现在怎么下单", "我该怎么买",
+                     "我先看看怎么下单", "我看一下如何购买", "咋拍", "怎么买",
+                     "买好了，你备注下138元", "买好了，你备注下138.50元", "备注138块钱", "备注138人民币",
+                     "备注￥138", "备注¥ 138.50", "138元", "在呢，我看看咋下单，138元吗？"):
+            for earlier in ((), (("buyer", "完全没有的车 2025"), ("agent", "x")),
+                            (("buyer", "示例车A 22款"), ("agent", vehicle_match.FIT_REPLY))):
+                with self.subTest(text=text, earlier=earlier):
+                    result = self.talk(*earlier, ("buyer", text), orders=[{"status": "待发货"}])
+                    self.assertEqual((result["status"], result["follow_up"], result["forced"]),
+                                     ("no_vehicle", False, None))
+
+    def test_purchase_and_money_cleanup_preserves_car_words(self):
+        for text in ("我看看咋下单，完全没有的车", "买好了，你备注下138元，完全没有的车",
+                     "备注极光X138", "下单138", "备注138.50", "备注X138元", "备注138元plus",
+                     "备注2025款", "备注7座", "下单看看", "备注咋", "我看看咋下单，未知远征138"):
+            with self.subTest(text=text):
+                self.assertFalse(vehicle_match._no_car_words(text))
+                self.assertEqual(self.talk(("buyer", text))["status"], "not_found")
+        for text in ("我看看咋下单，示例车A 22款", "买好了，你备注下138元，示例车A 22款"):
+            with self.subTest(text=text):
+                self.assertEqual(self.talk(("buyer", text))["status"], "matched")
+        # Numeric follow-ups must still supply the year/seats of the car being discussed.
+        for car, answer, model in (("示例车A", "22", "示例车A 20-24款"),
+                                   ("示例旅行车", "7座", "示例旅行车7座")):
+            with self.subTest(car=car, answer=answer):
+                result = self.talk(("buyer", car), ("agent", "哪款？"), ("buyer", answer))
+                self.assertEqual(result["status"], "matched")
+                self.assertEqual(result["candidates"], [{"family": "示例牌", "model": model}])
+
+    def test_purchase_classification_disallows_no_size_in_engine(self):
+        for text, reply in (("我看看咋下单", "请在商品页面选择规格下单"),
+                            ("我现在怎么买？", "请在商品页面选择规格下单"),
+                            ("买好了，你备注下138元", "已备注"), ("在呢", "您好，在的")):
+            with self.subTest(text=text):
+                ctx = {"messages": messages(("buyer", "完全没有的车 2025"), ("agent", "x"), ("buyer", text)),
+                       "history_complete": True}
+                vehicle = self.catalog.conversation(ctx["messages"], [{"status": "待发货"}])
+                self.assertEqual(vehicle["status"], "no_vehicle")
+                rule = {"id": "shop-answer", "contains": text, "description": "虚构店铺规则", "reply": reply}
+                # A provider attempting the unavailable rule must fail; the backup can still use the shop rule.
+                outputs = [completion({"action": "reply", "rule_id": "vehicle_no_size", "text": "", "reason": "x"}),
+                           completion({"action": "reply", "rule_id": "shop-answer", "text": "", "reason": "x"})]
+                with patch("backend.engine._post", side_effect=outputs) as post:
+                    result = model_decide(ctx, {"mode": "hybrid", "system_prompt": "虚构测试", "rules": [rule]},
+                                          {"primary": SLOT, "backup": SLOT}, vehicle_context={**vehicle, "version": 2})
+                self.assertEqual((result["action"], result["text"]), ("reply", reply))
+                self.assertNotEqual(result["text"], vehicle_match.NO_SIZE_REPLY)
+                self.assertEqual(post.call_count, 2)
+                for call in post.call_args_list:
+                    system, user = call.args[1]["messages"]
+                    self.assertNotIn('"id": "vehicle_no_size"', system["content"])
+                    self.assertIn('"id": "shop-answer"', system["content"])
+                    self.assertEqual(json.loads(user["content"])["vehicle_knowledge"]["status"], "no_vehicle")
+
     def test_program_stops(self):
         self.assertEqual(self.talk(("buyer", "吉姆尼5门"))["forced"], "needs_human")
         asked = self.talk(("buyer", "示例车A"), ("agent", "哪一款？"), ("buyer", "示例旅行车"), ("agent", "5座还是7座？"),
