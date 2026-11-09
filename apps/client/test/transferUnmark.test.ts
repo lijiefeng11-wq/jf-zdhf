@@ -34,7 +34,7 @@ function harness(scenario = "normal") {
     return Promise.resolve({});
   } } } };
   a.window = page; a.tracker = { status: () => ({ logged_in: true, identity: { platform_shop_id: "mall-1" } }) };
-  a.freshActive = async () => "9001";
+  a.freshActive = async () => "9001"; a.openConversation = async () => null;
   a.scanKeepingFresh = async () => ({ items: [{ key: "9001-x", active: true }] });
   a.starMarked = async () => false;
   a.run = async (script: string) => {
