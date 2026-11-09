@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
 
 export type PageClickResult = { status: "dispatched" } | { status: "not_sent" | "unknown"; reason: string };
@@ -70,4 +71,105 @@ export async function dispatchPageClick(contents: Contents, point: Point, rechec
   const release = await send(contents.debugger, "mouseReleased", p);
   // dispatched 只表示两条命令都已被接受，不代表平台已确认。
   return release.ok ? { status: "dispatched" } : { status: "unknown", reason: `release_${release.reason}` };
+}
+
+/** 临时移开控件遮挡并恢复；只向仍唯一、可见的原控件发出一次可信点击。 */
+export async function clickExposedPageControl(contents: WebContents, selector: string, options: {
+  deadline: number;
+  reasonPrefix: string;
+  recheck: () => string | null;
+  verify?: () => Promise<string | null>;
+  beforePress?: () => void;
+}): Promise<PageClickResult> {
+  const key = `claw-click-surface-${randomUUID()}`;
+  const until = options.deadline * 1000 - 1500;
+  let active = true, pressed = false;
+  const blocked = () => !active || contents.isDestroyed() ? "pdd_page_changed" : options.recheck() ?? (Date.now() >= until ? "claim_expiring" : null);
+  const stop = (reason: string): PageClickResult => ({ status: pressed ? "unknown" : "not_sent", reason });
+  const run = <T>(code: string): Promise<T> => contents.executeJavaScriptInIsolatedWorld(1001, [{ code }]);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const initial = blocked(); if (initial) return stop(initial);
+    const operation = async (): Promise<PageClickResult> => {
+      const prepared = await run<string | null>(`(() => {
+        const selector = ${JSON.stringify(selector)}, key = ${JSON.stringify(key)};
+        const visible = () => [...document.querySelectorAll(selector)].filter(el => {
+          const r = el.getBoundingClientRect(); return r.width >= 4 && r.height >= 4 && getComputedStyle(el).visibility === 'visible';
+        });
+        const targets = visible();
+        if (targets.length !== 1) return targets.length ? 'ambiguous' : 'missing';
+        const target = targets[0], displays = new Map(), inert = new Map();
+        let done = false, observer, timer;
+        const restore = () => {
+          if (done) return;
+          done = true; observer?.disconnect(); clearTimeout(timer);
+          for (const [el, [value, priority]] of displays) if (el.style.getPropertyValue('display') === 'none' && el.style.getPropertyPriority('display') === 'important') {
+            if (value) el.style.setProperty('display', value, priority); else el.style.removeProperty('display');
+          }
+          for (const [el, value] of inert) if (!el.hasAttribute('inert')) el.setAttribute('inert', value);
+          delete globalThis[key];
+        };
+        const hide = el => {
+          if (!el || el.contains(target)) return;
+          if (!displays.has(el)) displays.set(el, [el.style.getPropertyValue('display'), el.style.getPropertyPriority('display')]);
+          if (el.style.getPropertyValue('display') !== 'none' || el.style.getPropertyPriority('display') !== 'important') el.style.setProperty('display', 'none', 'important');
+        };
+        const point = () => {
+          if (done || Date.now() >= ${until}) { restore(); return 'expired'; }
+          if (!target.isConnected || visible().length !== 1 || visible()[0] !== target || target.matches(':disabled, [aria-disabled=true]')) return 'missing';
+          for (let el = target; el; el = el.parentElement) if (el.hasAttribute('inert')) {
+            if (!inert.has(el)) inert.set(el, el.getAttribute('inert'));
+            el.removeAttribute('inert');
+          }
+          document.querySelectorAll('.fullscreen-dialog-manager,.el-dialog__wrapper,.v-modal,.el-overlay').forEach(hide);
+          target.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+          const r = target.getBoundingClientRect(), left = Math.max(0, r.left), right = Math.min(innerWidth, r.right), top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
+          if (right - left < 4 || bottom - top < 4) return 'hidden';
+          for (const fy of [0.5, 0.25, 0.75]) for (const fx of [0.5, 0.25, 0.75]) {
+            const x = left + (right - left) * fx, y = top + (bottom - top) * fy;
+            let hit = document.elementFromPoint(x, y);
+            for (let i = 0; hit && hit !== target && !target.contains(hit) && !hit.contains(target) && i < 8; i++) {
+              hide(hit); hit = document.elementFromPoint(x, y);
+            }
+            if (hit && (hit === target || target.contains(hit))) return { x, y };
+          }
+          return 'covered';
+        };
+        globalThis[key] = { point, restore };
+        observer = new MutationObserver(() => { point(); });
+        observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'inert'] });
+        timer = setTimeout(restore, Math.max(1, ${until} - Date.now()));
+        const result = point();
+        return typeof result === 'string' ? result : null;
+      })()`);
+      if (prepared) return stop(prepared === "expired" ? "claim_expiring" : `${options.reasonPrefix}_${prepared}`);
+      const beforeFrame = blocked(); if (beforeFrame) return stop(beforeFrame);
+      try {
+        await contents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
+      } catch {
+        const reason = blocked(); if (reason) return stop(reason);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const changed = blocked(); if (changed) return stop(changed);
+        await contents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
+      }
+      const afterFrame = blocked(); if (afterFrame) return stop(afterFrame);
+      const invalid = await options.verify?.(); if (invalid) return stop(invalid);
+      const afterVerify = blocked(); if (afterVerify) return stop(afterVerify);
+      const point = await run<Point | string>(`globalThis[${JSON.stringify(key)}]?.point() ?? 'missing'`);
+      if (typeof point === "string") return stop(point === "expired" ? "claim_expiring" : `${options.reasonPrefix}_${point}`);
+      return await dispatchPageClick(contents, point, blocked, () => { options.beforePress?.(); pressed = true; });
+    };
+    return await Promise.race([operation(), new Promise<PageClickResult>(resolve => {
+      timer = setTimeout(() => { active = false; resolve(stop("claim_expiring")); }, Math.max(1, until - Date.now()));
+    })]);
+  } catch {
+    return stop("pdd_page_script_failed");
+  } finally {
+    active = false;
+    if (timer) clearTimeout(timer);
+    if (!contents.isDestroyed()) await Promise.race([
+      run(`globalThis[${JSON.stringify(key)}]?.restore()`).catch(() => undefined),
+      new Promise(resolve => setTimeout(resolve, 500)),
+    ]);
+  }
 }

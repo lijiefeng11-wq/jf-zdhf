@@ -15,7 +15,7 @@ import { LOGIN_COOKIE_NAME, LOGIN_COOKIE_URL, loginExpiryOf } from "../core/logi
 import { MAX_IMAGE_BYTES, type PageObserved } from "../core/protocol.js";
 import { judgeMark, MARK_COLOR_VALUE, MARK_QUIET_MS, markRequestVerdict, markResponseOk, newMarkWatch, observeInput, type MarkWatch } from "../core/pddMark.js";
 import type { PlatformPage } from "./platformWorkspace.js";
-import { dispatchPageClick, type PageClickResult } from "./pddClick.js";
+import { clickExposedPageControl, dispatchPageClick, type PageClickResult } from "./pddClick.js";
 import { collectStoreProducts, productReadScript } from "./productCollector.js";
 import type { ProductDoc } from "../core/productLearning.js";
 import { PddMessageWatcher } from "./pddMessageWatcher.js";
@@ -598,7 +598,7 @@ function goodsButtonScript(uid: string, index: number, thumb: string): string {
   })()`;
 }
 
-/** 视频弹窗是否已展开并列出视频；未展开时返回相机图标中心点。 */
+/** 视频弹窗是否已展开并列出视频；入口存在但未展开时返回 closed。 */
 const VIDEO_PANEL = `(() => {
   const rows = [...document.querySelectorAll(${JSON.stringify(VIDEO_ROWS)})].filter((li) => li.getClientRects().length > 0);
   if (rows.length) return "open";
@@ -606,16 +606,14 @@ const VIDEO_PANEL = `(() => {
   if (!cam) return "pdd_video_entry_missing";
   const r = cam.getBoundingClientRect();
   if (r.width < 4 || r.height < 4) return "pdd_video_entry_hidden";
-  const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
-  if (document.elementFromPoint(x, y)?.closest(${JSON.stringify(CAMERA)}) !== cam) return "pdd_video_entry_covered";
-  return { x, y };
+  return "closed";
 })()`;
 
 /** 当前对话视频弹窗各行的文字，以及第 index 行发送按钮的中心点。 */
-function videoRowsScript(uid: string, index: number): string {
+function videoRowsScript(uid: string, index: number, controlKey?: string, markControl = false): string {
   return `(() => {
-    const act = document.querySelector(${JSON.stringify(ITEM.replace("[data-random]", ".active[data-random]"))});
-    if (!act || !(act.getAttribute("data-random") || "").startsWith(${JSON.stringify(uid + "-")})) return "pdd_conversation_changed";
+    const active = [...document.querySelectorAll(${JSON.stringify(ITEM.replace("[data-random]", ".active[data-random]"))})];
+    if (!active.length || active.some(act => !(act.getAttribute("data-random") || "").startsWith(${JSON.stringify(uid + "-")}))) return "pdd_conversation_changed";
     const rows = [...document.querySelectorAll(${JSON.stringify(VIDEO_ROWS)})].filter((li) => li.getClientRects().length > 0);
     if (!rows.length) return "pdd_video_panel_closed";
     const texts = rows.map((li) => li.querySelector("div.video-item-info")?.textContent || "");
@@ -623,12 +621,10 @@ function videoRowsScript(uid: string, index: number): string {
     const row = rows[${index}];
     const btn = row?.querySelector(${JSON.stringify(VIDEO_BTN)});
     if (!btn || btn.disabled) return "pdd_video_button_missing";
-    btn.scrollIntoView({ block: "nearest" });
+    ${controlKey ? markControl ? `btn.setAttribute("data-claw-video-control", ${JSON.stringify(controlKey)});` : `if (btn.getAttribute("data-claw-video-control") !== ${JSON.stringify(controlKey)}) return "pdd_video_list_changed";` : ""}
     const r = btn.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return "pdd_video_button_hidden";
-    const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
-    if (document.elementFromPoint(x, y)?.closest(${JSON.stringify(VIDEO_BTN)}) !== btn) return "pdd_video_button_covered";
-    return { texts, srcs, x, y };
+    return { texts, srcs, x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`;
 }
 const SEND_BTN = "div.reply-box div.reply-footer div.send-btn";
@@ -2132,16 +2128,29 @@ export class PddPageAdapter implements PlatformAdapter {
   }
 
   /** 展开视频弹窗（点页面的相机图标），等页面列出视频。返回 "opened" | "already" | 失败原因。 */
-  private async openVideoPanel(): Promise<string> {
+  private async openVideoPanel(deadline = Date.now() / 1000 + 7, current: () => string | null = () => null, uid?: string): Promise<string> {
     const page = this.window, epoch = this.watchEpoch;
-    const state = await this.run<string | { x: number; y: number }>(VIDEO_PANEL).catch(() => "pdd_page_script_failed");
+    const guard = () => this.window !== page || this.watchEpoch !== epoch || !page || page.isDestroyed() ? "pdd_page_changed" : current() ?? (Date.now() / 1000 >= deadline - 1.5 ? "claim_expiring" : null);
+    const initial = guard(); if (initial) return initial;
+    const state = await this.run<string>(VIDEO_PANEL).catch(() => "pdd_page_script_failed");
+    const changed = guard(); if (changed) return changed;
     if (state === "open") return "already";
-    if (typeof state === "string") return state;
-    const click = await this.nativeClick(state, page, epoch);
+    if (state !== "closed") return state;
+    const click = await clickExposedPageControl(page!.webContents, CAMERA, {
+      deadline, reasonPrefix: "pdd_video_entry", recheck: guard,
+      verify: async () => {
+        if (!uid) return null;
+        const scan = await this.run<Scan>(SCAN);
+        return onlyBuyer(scan.items.filter(item => item.active).map(item => item.key)) === uid ? null : "pdd_conversation_changed";
+      },
+    });
     if (click.status !== "dispatched") return click.reason;
     for (let i = 0; i < 20; i++) {
+      const blocked = guard(); if (blocked) return blocked;
       await sleep(200);
-      if ((await this.run<unknown>(VIDEO_PANEL).catch(() => null)) === "open") return "opened";
+      const state = await this.run<unknown>(VIDEO_PANEL).catch(() => null);
+      const changed = guard(); if (changed) return changed;
+      if (state === "open") return "opened";
     }
     await this.closeVideoPanel();
     return "pdd_video_panel_not_opened";
@@ -2157,7 +2166,10 @@ export class PddPageAdapter implements PlatformAdapter {
       const r = cam.getBoundingClientRect();
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     })()`).catch(() => "closed");
-    if (typeof state !== "string") await this.nativeClick(state, page, epoch);
+    if (typeof state !== "string" && page && !page.isDestroyed()) await clickExposedPageControl(page.webContents, CAMERA, {
+      deadline: Date.now() / 1000 + 3, reasonPrefix: "pdd_video_entry",
+      recheck: () => this.window !== page || this.watchEpoch !== epoch ? "pdd_page_changed" : null,
+    });
   }
 
   /**
@@ -2206,8 +2218,11 @@ export class PddPageAdapter implements PlatformAdapter {
     let dialog = false;
     try {
       // 第一阶段：打开对话与弹窗、定位按钮、复核。失败均未触碰发送按钮。
-      const notOpened = await this.openConversation(uid);
+      const notOpened = await this.openConversation(uid, request.deadline, request.recheck);
       if (notOpened) return notSent(notOpened);
+      const clickGuard = () => this.window !== page || this.watchEpoch !== epoch ? "pdd_page_changed" :
+        request.recheck() ?? (request.deadline - Date.now() / 1000 < 1.5 ? "claim_expiring" : watch.blocked ? "pdd_item_concurrent_send" : null);
+      let videoClick: (() => Promise<PageClickResult>) | undefined;
       let located: { x: number; y: number };
       if (option.type === "instruction") {
         dialog = true;
@@ -2220,7 +2235,7 @@ export class PddPageAdapter implements PlatformAdapter {
         located = goods;
       } else {
       const before = this.videoRows;
-      const panel = await this.openVideoPanel();
+      const panel = await this.openVideoPanel(request.deadline, request.recheck, uid);
       if (panel !== "opened" && panel !== "already") return notSent(panel);
       opened = panel === "opened";
       for (let i = 0; opened && this.videoRows === before && i < 10; i++) await sleep(150);
@@ -2229,7 +2244,8 @@ export class PddPageAdapter implements PlatformAdapter {
       const rows = this.videoRows;
       const plan = planVideoClick(rows, option);
       if (typeof plan === "string" || !rows) return notSent(typeof plan === "string" ? plan : "pdd_video_library_not_loaded");
-      const dom = await this.run<string | { texts: string[]; srcs: string[][]; x: number; y: number }>(videoRowsScript(uid, plan.index)).catch(() => "pdd_page_script_failed");
+      const controlKey = crypto.randomUUID();
+      const dom = await this.run<string | { texts: string[]; srcs: string[][]; x: number; y: number }>(videoRowsScript(uid, plan.index, controlKey, true)).catch(() => "pdd_page_script_failed");
       if (typeof dom === "string") return notSent(dom);
       const target = verifyVideoTarget(rows, plan.index, dom);
       if (typeof target === "string") return notSent(target);
@@ -2237,16 +2253,24 @@ export class PddPageAdapter implements PlatformAdapter {
       if (this.videoRows !== rows) return notSent("pdd_video_list_changed");
       watch.url = plan.url;
       located = { x: dom.x, y: dom.y };
+      videoClick = () => clickExposedPageControl(page.webContents, `[data-claw-video-control="${controlKey}"]`, {
+        deadline: request.deadline, reasonPrefix: "pdd_video_button", recheck: clickGuard,
+        beforePress: () => { watch.clicked = true; },
+        verify: async () => {
+          if (this.videoRows !== rows) return "pdd_video_list_changed";
+          const fresh = await this.run<string | { texts: string[]; srcs: string[][] }>(videoRowsScript(uid, plan.index, controlKey));
+          if (typeof fresh === "string") return fresh;
+          const verified = verifyVideoTarget(rows, plan.index, fresh);
+          return typeof verified === "string" ? verified : null;
+        },
+      });
       }
       const blocked = request.recheck();
       if (blocked) return notSent(blocked);
       if (request.deadline - Date.now() / 1000 < 1.5) return notSent("claim_expiring");
       if (watch.blocked) return notSent("pdd_item_concurrent_send");
       const baseline = new Set([...this.tracker.history(uid).messages.flatMap((m) => (m.platform_message_id ? [m.platform_message_id] : [])), ...watch.seen.map((m) => m.msg_id)]);
-      const click = await dispatchPageClick(page.webContents, located, () => {
-        if (this.window !== page || this.watchEpoch !== epoch) return "pdd_page_changed";
-        return request.recheck() ?? (request.deadline - Date.now() / 1000 < 1.5 ? "claim_expiring" : watch.blocked ? "pdd_item_concurrent_send" : null);
-      }, () => { watch.clicked = true; });
+      const click = await (videoClick ? videoClick() : dispatchPageClick(page.webContents, located, clickGuard, () => { watch.clicked = true; }));
       if (click.status !== "dispatched") return click;
       // 第二阶段：已点发送；此后除平台确认外一律不确定。
       // 页面发送后的同步消息不带新消息（实测为空），接口成功后仍无回执就刷新一次页面，让页面重新加载该对话的聊天记录。
