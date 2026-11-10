@@ -18,7 +18,7 @@ export type PopupSweepMode = "auto" | "manual";
 export type PopupSweepResult = { dismissed: { label: string; layer: string }[]; seen: { layer: string; title: string | null; why: string }[]; expired?: boolean };
 
 /** 自动清理的按钮文字（去掉空白后整段相等）。 */
-export const AUTO_DISMISS_LABELS = ["我知道了", "知道了", "我已知晓", "已知晓", "好的知道了", "跳过", "跳过引导", "下次再说", "以后再说", "稍后再说", "暂不需要", "不再提示", "我已了解"] as const;
+export const AUTO_DISMISS_LABELS = ["我知道了", "知道了", "我已知晓", "已知晓", "好的知道了", "跳过", "跳过引导", "下次再说", "以后再说", "稍后再说", "暂不需要", "不再提示", "今天不再提示", "今日不再提示", "我已了解"] as const;
 /** 人工“清理弹窗”时额外点击的按钮文字。 */
 export const MANUAL_DISMISS_LABELS = ["关闭", "取消", "暂不", "我再想想"] as const;
 /** 浮层文字含这些内容时不自动处理，留给人工。 */
