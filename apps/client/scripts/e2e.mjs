@@ -419,6 +419,10 @@ try {
         <div style="position:absolute;right:0;bottom:0;z-index:101"><button onclick="log.push('nested-risky')">我知道了</button></div></div>
       <div class="form-dialog" style="position:fixed;left:360px;top:640px;width:280px;height:60px;z-index:2200;background:#fff"><input type="text" value="未保存的虚构内容">
         <div style="position:absolute;right:0;bottom:0;z-index:101"><button onclick="log.push('nested-input')">我知道了</button></div></div>
+      <div class="fullscreen-dialog-manager" style="position:fixed;inset:0;z-index:2500;background:rgba(0,0,0,.3)">
+        <div style="position:absolute;left:400px;top:120px;width:300px;background:#fff">浏览器未开启通知 开启消息通知后，可以收到新消息通知和回复超时预警
+          <button onclick="log.push('notify-on')">去开启</button>
+          <a onclick="this.closest('.fullscreen-dialog-manager').remove();log.push('notify-off')">今天不再提示</a></div></div>
       <button id="zoom-target" style="position:fixed;left:900px;top:600px;width:80px;height:30px;z-index:3000" onclick="log.push('zoom-click')">缩放点击</button>
       <script>window.log = []</script></body>`;
     const r = await electronApp.evaluate(async ({ BrowserWindow }, { html, auto, manual }) => {
@@ -448,12 +452,12 @@ try {
       }
     }, { html, auto: popupSweepScript("auto", Date.now() + 60_000), manual: popupSweepScript("manual", Date.now() + 60_000) });
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    if (!same(r.afterAuto, ["guide", "ad"])) throw new Error(`自动清理点击：${JSON.stringify(r.afterAuto)}`);
+    if (!same(r.afterAuto, ["guide", "notify-off", "ad"])) throw new Error(`自动清理点击：${JSON.stringify(r.afterAuto)}`);
     if (!same(r.first.seen.map((x) => x.why).sort(), ["not_guide", "risky", "risky"])) throw new Error(`自动清理跳过记录：${JSON.stringify(r.first.seen)}`);
     if (r.second.dismissed.length) throw new Error("第二次自动清理不应再点");
     if (r.isolated !== "undefined") throw new Error("清理状态泄露到页面脚本");
-    if (!same(r.afterManual, ["guide", "ad", "human-close"])) throw new Error(`人工清理点击：${JSON.stringify(r.afterManual)}`);
-    if (!same(r.final, ["guide", "ad", "human-close", "zoom-click"])) throw new Error(`缩放后点击：${JSON.stringify(r.final)}`);
+    if (!same(r.afterManual, ["guide", "notify-off", "ad", "human-close"])) throw new Error(`人工清理点击：${JSON.stringify(r.afterManual)}`);
+    if (!same(r.final, ["guide", "notify-off", "ad", "human-close", "zoom-click"])) throw new Error(`缩放后点击：${JSON.stringify(r.final)}`);
   });
   // 真实渲染进程忙时的互斥回归（scripts/test-popup-sweep.cjs，独立 Electron 进程，虚构 data: 页面）。
   await step("弹窗清理与发送互斥：页面忙时发送等清理真正结束，迟到的清理不点击", async () => {
