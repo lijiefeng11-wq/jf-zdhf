@@ -3,7 +3,7 @@ import type { WebContents } from "electron";
 import { errors } from "playwright-core";
 import { connectExistingPage } from "./electronPlaywright.js";
 import { selectSendControl } from "./scraplingSelector.js";
-import { dispatchPageClick, type PageClickResult } from "./pddClick.js";
+import { dispatchPageClick, syncPageFrame, type PageClickResult } from "./pddClick.js";
 
 /**
  * 平台发送按钮的文字。平台给出“推荐话术”时同一个按钮显示“坚持发送”，点下去仍发送输入框里的原文。
@@ -179,17 +179,10 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
         step = "surface_sweep";
         await wc.executeJavaScriptInIsolatedWorld(1001, [{ code: sweepSurface }]);
         // DOM 命中已变化时，合成器仍可能保留滚动前的点击区域；等新帧后再核验并按下。
-        // 首帧捕获可暂时失败；尚未点击时仅重取一次，仍受原截止与授权约束。
-        // 只捕获一个像素以同步页面，不保存或上传图像，也不显示隐藏窗口。
+        // 取不到画面（窗口在后台、被遮住、锁屏）时改等页面帧，不因此放弃发送；见 syncPageFrame。
         step = "frame_capture";
-        try {
-          await wc.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
-        } catch (error) {
-          if (wc.isDestroyed() || blocked()) throw error;
-          await new Promise(resolve => setTimeout(resolve, 50));
-          const reason = blocked(); if (reason) return reason;
-          await wc.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
-        }
+        await syncPageFrame(wc);
+        const reason = blocked(); if (reason) return reason;
         step = "input_verify";
         return input.evaluate((ta, args) => {
           const keys = [...document.querySelectorAll("li.chat-item .chat-item-box.active[data-random]")].map(e => /^([0-9]{1,32})-/.exec(e.getAttribute("data-random") ?? "")?.[1]);
@@ -238,7 +231,8 @@ export async function clickSendWithPlaywright(wc: WebContents, uid: string, text
     const layout = !pressed && !wc.isDestroyed()
       ? await Promise.race([wc.executeJavaScriptInIsolatedWorld(1001, [{ code: SEND_AREA_PROBE }]).catch(() => "probe_failed"), new Promise((r) => setTimeout(() => r("probe_timeout"), 500))])
       : "-";
-    diagnose(`step=${step} error=${kind} ${typeof layout === "string" ? layout.slice(0, 300) : "probe_invalid"}`);
+    const message = (error instanceof Error ? error.message : String(error)).split("\n")[0].replace(/[^\w .:-]/g, "").slice(0, 80);
+    diagnose(`step=${step} error=${kind} msg=${message} ${typeof layout === "string" ? layout.slice(0, 300) : "probe_invalid"}`);
     return stop(pressed ? "pdd_playwright_click_uncertain" : blocked() ?? (deadlineBounded && error instanceof errors.TimeoutError ? "claim_expiring" : "pdd_send_button_not_ready"));
   } finally {
     active = false;

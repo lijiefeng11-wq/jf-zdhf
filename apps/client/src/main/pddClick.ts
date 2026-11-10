@@ -36,6 +36,22 @@ function send(db: Contents["debugger"], type: "mousePressed" | "mouseReleased", 
 }
 
 /**
+ * 点击前等页面出一帧，让合成器的命中区域跟上刚做的滚动 / 移开遮挡。
+ * 先取 1 像素画面（不保存图像）；窗口在后台、被遮住或锁屏时取不到，就改在页面里等两次 requestAnimationFrame（最多 300ms）。
+ * 取不到画面不是放弃发送的理由：调用方随后照常按 DOM 命中、买家、原文与截止核验，点击仍只一次。
+ */
+export async function syncPageFrame(contents: Pick<WebContents, "capturePage" | "executeJavaScriptInIsolatedWorld">): Promise<void> {
+  try {
+    await contents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
+  } catch {
+    await Promise.race([
+      contents.executeJavaScriptInIsolatedWorld(1001, [{ code: "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))" }]).catch(() => undefined),
+      new Promise(resolve => setTimeout(resolve, 300)),
+    ]);
+  }
+}
+
+/**
  * 通过 CDP 在当前页面视口坐标处点击一次。
  * 预检（存活、已附加、调用方 recheck）失败时零命令返回 not_sent；
  * 按下命令已发出后，任何异常、拒绝或超时都是 unknown，绝不重试或补发松开。
@@ -144,14 +160,7 @@ export async function clickExposedPageControl(contents: WebContents, selector: s
       })()`);
       if (prepared) return stop(prepared === "expired" ? "claim_expiring" : `${options.reasonPrefix}_${prepared}`);
       const beforeFrame = blocked(); if (beforeFrame) return stop(beforeFrame);
-      try {
-        await contents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
-      } catch {
-        const reason = blocked(); if (reason) return stop(reason);
-        await new Promise(resolve => setTimeout(resolve, 50));
-        const changed = blocked(); if (changed) return stop(changed);
-        await contents.capturePage({ x: 0, y: 0, width: 1, height: 1 }, { stayHidden: true, stayAwake: true });
-      }
+      await syncPageFrame(contents);
       const afterFrame = blocked(); if (afterFrame) return stop(afterFrame);
       const invalid = await options.verify?.(); if (invalid) return stop(invalid);
       const afterVerify = blocked(); if (afterVerify) return stop(afterVerify);
