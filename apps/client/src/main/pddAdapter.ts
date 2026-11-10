@@ -39,6 +39,17 @@ const SCHEMA_PATHS = [
 /** 订单、物流相关接口：只在诊断模式下记录字段结构，用于确认页面从哪里加载订单列表与快递信息。 */
 const ORDER_HINT = /order|logistic|express|track|waybill|shipping|delivery/i;
 
+/** 平台页面请求属于要屏蔽的弹窗接口时返回其路径（只认 mms.pinduoduo.com 上的精确路径）。 */
+export function popupBlockPath(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const url = new URL(raw);
+    return url.hostname === "mms.pinduoduo.com" && POPUP_BLOCK_PATHS.includes(url.pathname) ? url.pathname : null;
+  } catch {
+    return null;
+  }
+}
+
 function probePath(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   try {
@@ -419,6 +430,19 @@ const UI_DRAIN = `(() => { const ui = window.__clawUi; if (!ui) return null; con
 type UiClick = { at: number; label: string | null; icon: string | null; chain: string; area?: string; trusted: boolean; opened: string[] };
 
 const SEND_PATH = "/plateau/chat/send_message";
+/**
+ * 会话页推广与考核提醒弹窗的查询接口：广告、运营位、3 分钟回复率预警、体验分预警。
+ * 页面请求时在本机直接回空结果，弹窗不再生成（全屏遮罩也就不会挡住输入区）；与收发消息无关。
+ * 未分配会话、聊天未开启、登录失效这类与收发有关的提醒不在此列，照常显示。
+ */
+export const POPUP_BLOCK_PATHS = [
+  "/refraction/robot/mall/chat/popup/query",
+  "/refraction/robot/mall/chat/popup/getChatPopup",
+  "/tornado/popup/popupExistPreCheck",
+  "/desert/stat/popup/mallReplyRateWarning",
+  "/tornado/popup/judgePushExperienceScorePopup",
+];
+const POPUP_EMPTY = Buffer.from(JSON.stringify({ success: true, errorCode: 1000000, errorMsg: null, result: {} })).toString("base64");
 const WORLD = 1001;
 const ITEM = "li.chat-item .chat-item-box[data-random]";
 
@@ -1286,6 +1310,12 @@ export class PddPageAdapter implements PlatformAdapter {
         const out = this.outgoing;
         if (out && out.matched === params.requestId) out.resolve({ status: "unknown", reason: "platform_request_failed" });
       } else if (method === "Fetch.requestPaused") {
+        const popup = popupBlockPath(params.request?.url);
+        if (popup) {
+          console.log(`[${this.shopId}] platform popup request blocked path=${popup}`);
+          void dbg.sendCommand("Fetch.fulfillRequest", { requestId: params.requestId, responseCode: 200, responseHeaders: [{ name: "Content-Type", value: "application/json;charset=UTF-8" }], body: POPUP_EMPTY }).catch(() => undefined);
+          return;
+        }
         const paused = probePath(params.request?.url);
         if (paused === LIBRARY_SEND_PATH || paused === GOODS_CARD_SEND_PATH || paused === INSTRUCT_SEND_PATH) this.onItemSendPaused(dbg, params, paused);
         else if (paused === MARK_REQUEST_PATH || paused === UNMARK_REQUEST_PATH) this.onMarkPaused(dbg, params, paused === MARK_REQUEST_PATH ? "mark" : "unmark", win);
@@ -1308,7 +1338,7 @@ export class PddPageAdapter implements PlatformAdapter {
     void dbg.sendCommand("Network.enable").catch(() => undefined);
     void dbg
       .sendCommand("Fetch.enable", {
-        patterns: [SEND_PATH, LIBRARY_SEND_PATH, GOODS_CARD_SEND_PATH, INSTRUCT_SEND_PATH, MARK_REQUEST_PATH, UNMARK_REQUEST_PATH].map((p) => ({ urlPattern: "*://mms.pinduoduo.com" + p + "*", requestStage: "Request" })),
+        patterns: [SEND_PATH, LIBRARY_SEND_PATH, GOODS_CARD_SEND_PATH, INSTRUCT_SEND_PATH, MARK_REQUEST_PATH, UNMARK_REQUEST_PATH, ...POPUP_BLOCK_PATHS].map((p) => ({ urlPattern: "*://mms.pinduoduo.com" + p + "*", requestStage: "Request" })),
       })
       .catch(() => undefined);
     return true;

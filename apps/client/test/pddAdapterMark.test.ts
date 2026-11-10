@@ -9,7 +9,7 @@ import type { MarkColor } from "../src/core/protocol.js";
 const req = Module.createRequire(__filename);
 const electronPath = req.resolve("electron");
 req.cache[electronPath] = { id: electronPath, filename: electronPath, loaded: true, exports: { BrowserWindow: class {}, session: { fromPartition: () => ({}) } } } as unknown as NodeModule;
-const { PddPageAdapter, CONV_STAR_SNAPSHOT, starOptionsScript } = req("../src/main/pddAdapter.js") as typeof import("../src/main/pddAdapter.js");
+const { PddPageAdapter, CONV_STAR_SNAPSHOT, starOptionsScript, POPUP_BLOCK_PATHS, popupBlockPath } = req("../src/main/pddAdapter.js") as typeof import("../src/main/pddAdapter.js");
 
 const BUYER = "880011223344";
 const OTHER = "880099887766";
@@ -76,7 +76,7 @@ function harness(opts: Opts = {}) {
   const CDP_INPUT: Record<string, string> = { mouseMoved: "mouseMove", mousePressed: "mouseDown", mouseReleased: "mouseUp" };
   let attached = false;
   const bodies = new Map<string, string>();
-  const log = { clicks: [] as { x: number; y: number }[], hovers: [] as { x: number; y: number }[], continued: [] as string[], failed: [] as string[], fetchPatterns: [] as string[], scripts: [] as string[], ownedCode: "" };
+  const log = { clicks: [] as { x: number; y: number }[], hovers: [] as { x: number; y: number }[], continued: [] as string[], failed: [] as string[], fulfilled: [] as { requestId: string; body: string }[], fetchPatterns: [] as string[], scripts: [] as string[], ownedCode: "" };
   let pops = 0;
   const net: Net = {
     request(id, path, data, networkId) {
@@ -104,6 +104,7 @@ function harness(opts: Opts = {}) {
       if (method === "Fetch.enable") log.fetchPatterns.push(...params.patterns.map((p: any) => p.urlPattern));
       if (method === "Fetch.continueRequest") log.continued.push(params.requestId);
       if (method === "Fetch.failRequest") log.failed.push(params.requestId);
+      if (method === "Fetch.fulfillRequest") log.fulfilled.push({ requestId: params.requestId, body: Buffer.from(params.body, "base64").toString() });
       if (method === "Network.getResponseBody") {
         const body = bodies.get(params.requestId);
         opts.onBody?.(adapter);
@@ -168,6 +169,22 @@ describe("标星：点击与成功判据（Electron 替身）", () => {
   test("拦截规则包含标星与取消收藏接口", () => {
     const h = harness();
     for (const p of [MARK, UNMARK]) assert.ok(h.log.fetchPatterns.includes(`*://mms.pinduoduo.com${p}*`));
+  });
+
+  test("推广与考核提醒弹窗接口：本机回空结果，不到达平台；发送等其他请求照常放行", () => {
+    const h = harness();
+    for (const p of POPUP_BLOCK_PATHS) assert.ok(h.log.fetchPatterns.includes(`*://mms.pinduoduo.com${p}*`), p);
+    POPUP_BLOCK_PATHS.forEach((p, i) => h.net.request(`p-${i}`, p, {}));
+    assert.deepEqual(h.log.fulfilled.map((f) => f.requestId), POPUP_BLOCK_PATHS.map((_, i) => `f-p-${i}`));
+    for (const f of h.log.fulfilled) assert.deepEqual(JSON.parse(f.body), { success: true, errorCode: 1000000, errorMsg: null, result: {} });
+    assert.deepEqual(h.log.continued, []);
+    assert.deepEqual(h.log.failed, []);
+    // 未分配会话等与收发有关的提醒、以及其他域名上的同名路径不屏蔽。
+    for (const url of ["https://mms.pinduoduo.com/tornado/popup/judgePushUnAssignPopup", "https://mms.pinduoduo.com/chats/checkMallChatEnabled", "https://example.invalid/tornado/popup/popupExistPreCheck", "https://mms.pinduoduo.com/tornado/popup/popupExistPreCheckX", null]) assert.equal(popupBlockPath(url), null, String(url));
+    assert.equal(popupBlockPath("https://mms.pinduoduo.com/desert/stat/popup/mallReplyRateWarning?x=1"), "/desert/stat/popup/mallReplyRateWarning");
+    h.net.request("s-1", "/plateau/chat/send_message", { text: "虚构" });
+    assert.deepEqual(h.log.continued, ["f-s-1"]);
+    assert.equal(h.log.fulfilled.length, POPUP_BLOCK_PATHS.length);
   });
 
   test("全部满足：只点目标颜色项一次，放行一条请求，按它自己的响应确认；不点星标本身", async () => {
